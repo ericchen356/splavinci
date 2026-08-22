@@ -42,7 +42,8 @@ export type MiniMapProps = {
   selectedId?: string | null;
   /** Generated route, drawn as a line. */
   polyline?: readonly Vec3[];
-  /** Live camera pose - draws a dot with a facing arrow. */
+  /** Live camera pose. Draws the you-are-here chevron, and is what the plan
+   *  turns to follow - without one the map stays north-up. */
   camera?: { position: Vec3; lookAt: Vec3 } | null;
   comments?: readonly Comment[];
   /**
@@ -91,6 +92,17 @@ const MARKER_R = 7;
 const MARKER_R_SELECTED = 9;
 const MARKER_HIT_R = 13;
 const COMMENT_HIT_R = 12;
+
+/* The you-are-here chevron, in canvas px measured from the camera's own
+   position: how far the tip runs ahead of it, how far the shoulders sit
+   behind, how wide they are, and how far the tail bows out past them. Split
+   fore and aft rather than given as one length because the glyph has to sit
+   centred on the position it reports - a triangle grown forward from the
+   camera point puts the mark half a body ahead of where the camera is. */
+const CAMERA_TIP = 11;
+const CAMERA_TAIL = 6.5;
+const CAMERA_HALF_WIDTH = 7.5;
+const CAMERA_BULGE = 3;
 
 /** A press in progress, from pointerdown to pointerup. */
 type Gesture = {
@@ -146,35 +158,74 @@ function localPoint(
 type Projection = {
   toScreen(x: number, z: number): { sx: number; sy: number };
   toWorld(sx: number, sy: number): { x: number; z: number };
+  /** A world bearing as a canvas angle. Arcs and wedges need this, not toScreen. */
+  toAngle(bearing: number): number;
+  /** A world XZ offset as a canvas offset: rotated, unscaled. For arrow heads. */
+  toDelta(dx: number, dz: number): { ex: number; ey: number };
   scale: number;
   offsetX: number;
   offsetY: number;
+  /** Radians the plan is turned by, clockwise on screen. 0 is north-up. */
+  rotation: number;
+  cx: number;
+  cy: number;
 };
 
+/**
+ * Plan-to-canvas transform, optionally turned.
+ *
+ * Rotation lives here rather than in a canvas transform because the map is an
+ * input surface as well as a picture: markers, the route, hit-testing and
+ * drag-to-move all go through toScreen/toWorld, and a ctx.rotate() would turn
+ * the picture while leaving every coordinate the pointer code compares against
+ * pointing the old way. Labels are the reason it is not the other way round -
+ * drawn through toScreen they stay upright at any angle, where a canvas
+ * transform would stand the numbers on their heads.
+ */
 function projectionFor(
   box: { minX: number; minZ: number; maxX: number; maxZ: number },
   width: number,
   height: number,
+  rotation = 0,
 ): Projection {
   const pad = 8;
   const w = box.maxX - box.minX;
   const h = box.maxZ - box.minZ;
-  const scale = Math.min((width - pad * 2) / w, (height - pad * 2) / h);
+  // A turning plan is fitted to its own diagonal, so the corners stay inside
+  // the panel at every angle. Fitting the upright box instead would clip the
+  // ends of a long room as it came round, and fitting per-angle would make the
+  // whole plan breathe in and out as you turned - the scale has to be constant
+  // for the map to be readable while it moves.
+  const span = rotation === 0 ? { w, h } : { w: Math.hypot(w, h), h: Math.hypot(w, h) };
+  const scale = Math.min((width - pad * 2) / span.w, (height - pad * 2) / span.h);
   const offsetX = (width - w * scale) / 2;
   const offsetY = (height - h * scale) / 2;
+  const cx = width / 2;
+  const cy = height / 2;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
   return {
-    scale, offsetX, offsetY,
+    scale, offsetX, offsetY, rotation, cx, cy,
     toScreen(x, z) {
-      return {
-        sx: offsetX + (x - box.minX) * scale,
-        sy: offsetY + (z - box.minZ) * scale,
-      };
+      const ux = offsetX + (x - box.minX) * scale - cx;
+      const uy = offsetY + (z - box.minZ) * scale - cy;
+      return { sx: cx + ux * cos - uy * sin, sy: cy + ux * sin + uy * cos };
     },
     toWorld(sx, sy) {
+      const dx = sx - cx;
+      const dy = sy - cy;
+      const ux = dx * cos + dy * sin;
+      const uy = -dx * sin + dy * cos;
       return {
-        x: box.minX + (sx - offsetX) / scale,
-        z: box.minZ + (sy - offsetY) / scale,
+        x: box.minX + (ux + cx - offsetX) / scale,
+        z: box.minZ + (uy + cy - offsetY) / scale,
       };
+    },
+    toAngle(bearing) {
+      return bearing + rotation;
+    },
+    toDelta(dx, dz) {
+      return { ex: dx * cos - dz * sin, ey: dx * sin + dz * cos };
     },
   };
 }
@@ -203,6 +254,18 @@ export function MiniMap({
   const gestureRef = useRef<Gesture | null>(null);
   const [overMarker, setOverMarker] = useState(false);
   const [dragging, setDragging] = useState(false);
+
+  /* The turn the plan is drawn at. Held in a ref and eased toward the camera's
+     bearing rather than tracked exactly: a pose that jitters by a degree a
+     frame would make the whole map shiver, and an instant snap when the shot
+     cuts to a new heading is far more disorienting than a short swing. */
+  const rotRef = useRef(0);
+  /* draw() eases one step per call, and calls are driven by the camera prop.
+     When the camera stops mid-swing the easing would stop with it, leaving the
+     plan parked at whatever angle it happened to reach - so an unconverged
+     draw books its own next frame. */
+  const drawRef = useRef<() => void>(() => {});
+  const settleRef = useRef<number | null>(null);
 
   const plan = useMemo(
     () => (grid ? buildPlanLayer(grid, planColours(), cameraRadius) : null),
@@ -234,8 +297,8 @@ export function MiniMap({
     const t = theme();
     const colours = planColours();
 
-    ctx.fillStyle = t.mapGround;
-    ctx.fillRect(0, 0, width, height);
+    // No background fill. The map floats on the 3D render, so anything it does
+    // not have an opinion about should show the scene rather than a slab.
 
     if (!grid) {
       ctx.fillStyle = t.muted;
@@ -246,27 +309,62 @@ export function MiniMap({
       return;
     }
 
+    /* Heading-up, always: the map is read while flying, and matching what is on
+       screen beats keeping north at the top. There is no north-up mode any
+       more - it was one click on a compass nobody used, and the compass was
+       costing a corner of a 300px map to say something the plan's own shape
+       already says. A screen with no camera pose (review, before playback)
+       falls through to target 0, which is north-up by construction.
+
+       Canvas up is -y, so a bearing b comes to the top when the plan is turned
+       by (-PI/2 - b). */
+    let target = 0;
+    if (camera) {
+      const dx = camera.lookAt[0] - camera.position[0];
+      const dz = camera.lookAt[2] - camera.position[2];
+      if (Math.hypot(dx, dz) > 1e-4) target = -Math.PI / 2 - Math.atan2(dz, dx);
+    }
+    // Ease along the short way round, so passing due north does not unwind the
+    // long way through three quarters of a turn.
+    let delta = (target - rotRef.current) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    rotRef.current += delta * 0.25;
+    if (Math.abs(delta) > 0.002 && settleRef.current === null) {
+      settleRef.current = requestAnimationFrame(() => {
+        settleRef.current = null;
+        drawRef.current();
+      });
+    }
+
     const proj = projectionFor(plan?.extent ?? {
       minX: grid.bounds.min.x, minZ: grid.bounds.min.z,
       maxX: grid.bounds.max.x, maxZ: grid.bounds.max.z,
-    }, width, height);
+    }, width, height, rotRef.current);
     projRef.current = proj;
 
     if (plan?.fill) {
       // Nearest-neighbour: smoothing bleeds the floor fill out past the wall
       // line and the two stop agreeing about where the edge is.
       ctx.imageSmoothingEnabled = false;
+      // The only draw that cannot go through toScreen - drawImage places a
+      // rectangle, so the turn has to be a canvas transform. Same centre and
+      // angle as the projection, or the fill and its outline come apart.
+      ctx.save();
+      ctx.translate(proj.cx, proj.cy);
+      ctx.rotate(proj.rotation);
+      ctx.translate(-proj.cx, -proj.cy);
       ctx.drawImage(
         plan.fill, proj.offsetX, proj.offsetY,
         (plan.extent.maxX - plan.extent.minX) * proj.scale,
         (plan.extent.maxZ - plan.extent.minZ) * proj.scale,
       );
+      ctx.restore();
     }
     if (plan) {
       // Outlines last, so the line work sits on top of the fills. This is what
       // makes the plan read as rooms and hallways rather than as a field of
       // coloured cells.
-      strokeSegments(ctx, plan.wallOutline, proj, colours.wallOutline, 1);
       strokeSegments(ctx, plan.openOutline, proj, colours.outline, 1.25);
     }
 
@@ -312,7 +410,7 @@ export function MiniMap({
         // The arc the camera actually sweeps, as a wedge rooted at the marker.
         ctx.beginPath();
         ctx.moveTo(sx, sy);
-        ctx.arc(sx, sy, reach, aim.from, aim.from + aim.sweep, aim.sweep < 0);
+        ctx.arc(sx, sy, reach, proj.toAngle(aim.from), proj.toAngle(aim.from + aim.sweep), aim.sweep < 0);
         ctx.closePath();
         ctx.fillStyle = alpha(t.mapAim, selected ? 0.3 : 0.14);
         ctx.fill();
@@ -323,7 +421,8 @@ export function MiniMap({
         // No swing: a single tick showing which way it faces.
         ctx.beginPath();
         ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + Math.cos(aim.from) * reach, sy + Math.sin(aim.from) * reach);
+        const tick = proj.toAngle(aim.from);
+        ctx.lineTo(sx + Math.cos(tick) * reach, sy + Math.sin(tick) * reach);
         ctx.strokeStyle = alpha(t.mapAim, selected ? 0.9 : 0.5);
         ctx.lineWidth = selected ? 2 : 1.5;
         ctx.stroke();
@@ -363,52 +462,70 @@ export function MiniMap({
       ctx.fill();
       // A dark keyline, so a pin dropped on a light stretch of floor keeps its
       // silhouette instead of dissolving into it.
-      ctx.strokeStyle = t.mapGround;
+      ctx.strokeStyle = alpha(t.mapKeyline, 0.7);
       ctx.lineWidth = 1;
       ctx.stroke();
     }
 
-    /* live camera: dot plus facing arrow */
+    /* live camera: one chevron, tip forward, tail bowed out behind it */
     if (camera) {
       const { sx, sy } = proj.toScreen(camera.position[0], camera.position[2]);
-      const dx = camera.lookAt[0] - camera.position[0];
-      const dz = camera.lookAt[2] - camera.position[2];
-      const len = Math.hypot(dx, dz) || 1;
-      const ax = (dx / len) * 16;
-      const az = (dz / len) * 16;
+      const heading = proj.toAngle(
+        Math.atan2(camera.lookAt[2] - camera.position[2], camera.lookAt[0] - camera.position[0]),
+      );
 
-      ctx.strokeStyle = t.mapCamera;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx + ax, sy + az);
-      ctx.stroke();
+      /* Drawn last, and as ONE solid glyph. A dot with a separate stem and
+         arrowhead made the reader assemble three marks into a single answer,
+         and at map scale the stem was long enough to be mistaken for a route.
+         Position and facing are one question, so they get one shape.
 
-      // arrow head
-      const angle = Math.atan2(az, ax);
+         A canvas transform is safe here where it is not for the plan: this is
+         decoration, so nothing has to run the same maths backwards to hit-test
+         it or to turn a click back into world coordinates. */
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(heading);
       ctx.beginPath();
-      ctx.moveTo(sx + ax, sy + az);
-      ctx.lineTo(sx + ax - 6 * Math.cos(angle - 0.4), sy + az - 6 * Math.sin(angle - 0.4));
-      ctx.lineTo(sx + ax - 6 * Math.cos(angle + 0.4), sy + az - 6 * Math.sin(angle + 0.4));
+      ctx.moveTo(CAMERA_TIP, 0);
+      ctx.lineTo(-CAMERA_TAIL, CAMERA_HALF_WIDTH);
+      // Bowed away from the tip rather than cut straight across. A flat base
+      // makes an equilateral triangle, which is already the comment pin's
+      // shape; the swelled tail is what says "this end is the back".
+      ctx.quadraticCurveTo(
+        -CAMERA_TAIL - CAMERA_BULGE * 2, 0,
+        -CAMERA_TAIL, -CAMERA_HALF_WIDTH,
+      );
       ctx.closePath();
-      ctx.fillStyle = t.mapCamera;
-      ctx.fill();
 
-      ctx.beginPath();
-      ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+      // Halo first, stroked wide: half the line lands outside the fill, which
+      // is what holds the white edge wherever the marker happens to be sitting
+      // - over the dark plan, or off it and onto the bright render behind.
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = alpha(t.mapKeyline, 0.6);
+      ctx.lineWidth = 4;
+      ctx.stroke();
       ctx.fillStyle = t.mapCamera;
       ctx.fill();
-      ctx.strokeStyle = t.mapGround;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      ctx.restore();
     }
   }, [
     grid, plan, waypoints, selectedId, polyline, camera, comments, shotPreview,
     height,
   ]);
 
+  /* The settle frame calls through this ref rather than closing over `draw`,
+     so a frame booked by one render runs the newest draw rather than a stale
+     one. It was declared and never assigned, which left every unconverged
+     swing calling an empty function: the plan stopped turning the instant the
+     camera did and parked at whatever angle the last prop change reached. */
   useEffect(() => {
+    drawRef.current = draw;
     draw();
+    return () => {
+      if (settleRef.current === null) return;
+      cancelAnimationFrame(settleRef.current);
+      settleRef.current = null;
+    };
   }, [draw]);
 
   useEffect(() => {

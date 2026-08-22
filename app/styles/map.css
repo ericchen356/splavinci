@@ -1,0 +1,9 @@
+/* ================================================================
+ * map
+ *
+ * A partial of the one global sheet, split out only so that concurrent work
+ * on separate parts of the app does not contend for a single file. Tokens
+ * live in globals.css and are the only source of colour, spacing and type
+ * here - do not introduce a raw hex, a bare pixel padding or a hand-picked
+ * font size below this line.
+ * ================================================================ */

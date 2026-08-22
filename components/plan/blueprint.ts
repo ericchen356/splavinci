@@ -77,6 +77,126 @@ const solid = (grid: WalkGrid, c: number, r: number): boolean => {
 };
 
 /** Cell range and world box that actually contain geometry. */
+/** Opacity of the walkable fill, so the render stays visible beneath it. */
+const MAP_FILL_ALPHA = 0.82;
+
+/**
+ * Enclosed gaps smaller than this are drawn as floor. Square metres.
+ *
+ * DISPLAY ONLY - the routing grid is untouched, so the camera still avoids
+ * every one of them. A chair leg or a stray obstacle cell punches a hole a few
+ * centimetres across in the silhouette, and at map scale a scatter of those
+ * reads as dirt on the screen rather than as furniture: it buries the
+ * structure a plan exists to show. Anything you could actually fly around
+ * survives.
+ *
+ * In square metres and not in cells, because cell size is derived per capture
+ * (grid.ts sizes the grid to roughly 160 cells across the longer axis), so the
+ * same cell count means a dinner plate in a studio flat and a dining table
+ * across a 37 m outdoor capture.
+ */
+const MAP_MIN_HOLE_AREA = 0.35;
+
+/**
+ * Marooned floor smaller than this is not drawn at all. Square metres.
+ *
+ * Also display only. Floor the camera cannot route to is worth showing, greyed,
+ * when it is a room you might wonder why you cannot enter. Below about a small
+ * bathroom it is the far side of a doorway the clearance radius would not fit
+ * through, and drawing it just stipples the margins of the plan.
+ */
+const MAP_MIN_CUTOFF_AREA = 2;
+
+/** Cells drawn as floor, and cells drawn as floor the camera cannot get to. */
+export type DisplayMasks = {
+  shown: Uint8Array;
+  cutOff: Uint8Array;
+};
+
+/**
+ * 4-connected components of a mask, with whether each one touches the border.
+ *
+ * Border contact is the test for "enclosed": a gap that runs off the edge of
+ * the surveyed area is open to somewhere, and might be a doorway or a branch
+ * nobody walked down. That is exactly the thing the map must not paper over.
+ */
+function eachComponent(
+  mask: Uint8Array,
+  want: 0 | 1,
+  cols: number,
+  rows: number,
+  fn: (cells: number[], touchesEdge: boolean) => void,
+): void {
+  const seen = new Uint8Array(cols * rows);
+  const stack: number[] = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (mask[start] !== want || seen[start]) continue;
+    const cells: number[] = [];
+    let touchesEdge = false;
+    stack.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      cells.push(cur);
+      const cx = cur % cols;
+      const cz = (cur / cols) | 0;
+      if (cx === 0 || cz === 0 || cx === cols - 1 || cz === rows - 1) touchesEdge = true;
+      if (cx > 0 && mask[cur - 1] === want && !seen[cur - 1]) { seen[cur - 1] = 1; stack.push(cur - 1); }
+      if (cx < cols - 1 && mask[cur + 1] === want && !seen[cur + 1]) { seen[cur + 1] = 1; stack.push(cur + 1); }
+      if (cz > 0 && mask[cur - cols] === want && !seen[cur - cols]) { seen[cur - cols] = 1; stack.push(cur - cols); }
+      if (cz < rows - 1 && mask[cur + cols] === want && !seen[cur + cols]) { seen[cur + cols] = 1; stack.push(cur + cols); }
+    }
+    fn(cells, touchesEdge);
+  }
+}
+
+/**
+ * What the map paints, as distinct from what the router uses.
+ *
+ * DISPLAY ONLY - the routing grid is untouched, so the camera still avoids
+ * every obstacle and still cannot reach anything it could not reach before.
+ * Two things get cleaned up, both for the same reason: at map scale a scatter
+ * of single cells reads as dirt on the screen rather than as information, and
+ * it buries the structure a plan exists to show.
+ *
+ *   - Enclosed gaps under MAP_MIN_HOLE_CELLS are filled. A chair leg punching
+ *     a two-cell hole in the floor is not something you can act on.
+ *   - Marooned floor under MAP_MIN_CUTOFF_CELLS is dropped. A whole room the
+ *     camera cannot enter is worth showing, greyed; six cells behind a sofa
+ *     is not.
+ */
+export function displayMasks(grid: WalkGrid, reachable: Uint8Array | null): DisplayMasks {
+  const cellArea = grid.cellSize * grid.cellSize;
+  const minHoleCells = Math.max(1, Math.round(MAP_MIN_HOLE_AREA / cellArea));
+  const minCutOffCells = Math.max(1, Math.round(MAP_MIN_CUTOFF_AREA / cellArea));
+  const total = grid.cols * grid.rows;
+  const open = new Uint8Array(total);
+  const shown = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    if (grid.floor[i] !== 1 || grid.blocked[i] !== 0) continue;
+    open[i] = 1;
+    if (!reachable || reachable[i]) shown[i] = 1;
+  }
+
+  eachComponent(shown, 0, grid.cols, grid.rows, (cells, touchesEdge) => {
+    if (touchesEdge || cells.length > minHoleCells) return;
+    for (const cell of cells) shown[cell] = 1;
+  });
+
+  const cutOff = new Uint8Array(total);
+  if (reachable) {
+    const marooned = new Uint8Array(total);
+    for (let i = 0; i < total; i++) if (open[i] && !shown[i]) marooned[i] = 1;
+    eachComponent(marooned, 1, grid.cols, grid.rows, (cells) => {
+      if (cells.length < minCutOffCells) return;
+      for (const cell of cells) cutOff[cell] = 1;
+    });
+  }
+
+  return { shown, cutOff };
+}
+
 export type ContentExtent = {
   c0: number; c1: number; r0: number; r1: number;
   minX: number; minZ: number; maxX: number; maxZ: number;
@@ -134,6 +254,8 @@ export function renderPlanFill(
   colours = planColours(),
   /** Cells the camera can reach. Everything else open is drawn as cut off. */
   reachable?: Uint8Array | null,
+  /** Drawing masks. Recomputed if not supplied; routing is untouched either way. */
+  masks?: DisplayMasks | null,
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   const w = extent.c1 - extent.c0 + 1;
@@ -144,25 +266,38 @@ export function renderPlanFill(
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
+  const { shown, cutOff } = masks ?? displayMasks(grid, reachable ?? null);
   const image = ctx.createImageData(w, h);
   const floorRgb = toRgb(colours.floor);
-  const wallRgb = toRgb(colours.wall);
   const cutOffRgb = toRgb(colours.unreachable);
+  const floorAlpha = Math.round(255 * MAP_FILL_ALPHA);
 
   for (let r = extent.r0; r <= extent.r1; r++) {
     for (let c = extent.c0; c <= extent.c1; c++) {
       const i = cellIndex(grid, c, r);
       const p = ((r - extent.r0) * w + (c - extent.c0)) * 4;
-      if (grid.blocked[i]) {
-        image.data[p] = wallRgb[0]; image.data[p + 1] = wallRgb[1];
-        image.data[p + 2] = wallRgb[2]; image.data[p + 3] = 255;
-      } else if (grid.floor[i]) {
-        const rgb = !reachable || reachable[i] ? floorRgb : cutOffRgb;
-        image.data[p] = rgb[0]; image.data[p + 1] = rgb[1];
-        image.data[p + 2] = rgb[2]; image.data[p + 3] = 255;
-      } else {
-        image.data[p + 3] = 0;
+      // Wall mass and unsurveyed space are NOT painted.
+      //
+      // Filling them put a field of dark cells across the map - speckle that
+      // read as noise rather than as structure, and which the walkable
+      // region's own outline already describes far more clearly. Leaving them
+      // clear also lets the render show through, so the map sits on the scene
+      // as a silhouette of the space instead of as an opaque card.
+      if (!shown[i]) {
+        // A room the camera cannot route to still shows, greyed. Wall mass,
+        // unsurveyed space and marooned scraps are not painted at all.
+        if (!cutOff[i]) continue;
+        image.data[p] = cutOffRgb[0];
+        image.data[p + 1] = cutOffRgb[1];
+        image.data[p + 2] = cutOffRgb[2];
+        image.data[p + 3] = Math.round(255 * MAP_FILL_ALPHA * 0.6);
+        continue;
       }
+      const rgb = floorRgb;
+      image.data[p] = rgb[0];
+      image.data[p + 1] = rgb[1];
+      image.data[p + 2] = rgb[2];
+      image.data[p + 3] = floorAlpha;
     }
   }
   ctx.putImageData(image, 0, 0);
@@ -246,15 +381,19 @@ export function buildPlanLayer(
   const extent = contentExtent(grid);
   const reach = radius === undefined ? null : reachableMask(grid, radius);
   const reachable = reach?.mask ?? null;
+  // One mask for the fill and the outline. If they disagree, every closed hole
+  // gets an outline drawn around floor that is painted as floor - the speckle
+  // comes back as rings instead of dots.
+  const masks = displayMasks(grid, reachable);
+  const inShown = (g: WalkGrid, c: number, r: number) =>
+    c >= 0 && r >= 0 && c < g.cols && r < g.rows && masks.shown[cellIndex(g, c, r)] === 1;
   return {
-    fill: renderPlanFill(grid, extent, colours, reachable),
+    fill: renderPlanFill(grid, extent, colours, reachable, masks),
     extent,
     // Outline the REACHABLE region when we know it: the line is what reads as
     // the edge of the space, and drawing it around pockets you cannot fly to
     // advertises rooms that are not on offer.
-    openOutline: planOutline(grid, reachable
-      ? (g, c, r) => walkable(g, c, r) && reachable[cellIndex(g, c, r)] === 1
-      : walkable),
+    openOutline: planOutline(grid, inShown),
     wallOutline: planOutline(grid, solid),
     reachable,
     reachableCells: reach?.cells ?? 0,

@@ -1,0 +1,381 @@
+/* ================================================================
+ * inspector
+ *
+ * A partial of the one global sheet, split out only so that concurrent work
+ * on separate parts of the app does not contend for a single file. Tokens
+ * live in globals.css and are the only source of colour, spacing and type
+ * here - do not introduce a raw hex, a bare pixel padding or a hand-picked
+ * font size below this line.
+ *
+ * Everything the waypoint inspector draws: the card, its controls, the aim
+ * dial's own parts, and the typed number field the sliders are paired with.
+ * The panel used to carry all of this as inline style objects, one per call
+ * site, which is why a label was 10px in one row and 12px in the next and why
+ * nothing in it picked up the restyle. The dial's sub-elements are defined
+ * here rather than beside the .dial block in globals.css for the same
+ * concurrency reason the partials exist at all - it is one sheet either way.
+ * ================================================================ */
+
+/* ================================================================
+ * The card
+ * ================================================================ */
+
+/* White on the sidebar's own white, so the hairline and the rounding are what
+   separate it - a fill would need a third surface for no information gained. */
+.insp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+
+/* ---------------- header ---------------- */
+
+.insp__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* The position in the running order, as a chip. A rounded square rather than a
+   pill because it numbers a sequence: a pill reads as a tag you could remove,
+   a square reads as a step you are standing on. Tabular figures so 1 and 11
+   sit on the same left edge down the list. */
+.insp__step {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--h-control-sm);
+  height: var(--h-control-sm);
+  font-size: var(--fs-2);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  background: var(--surface-sunk);
+  border-radius: var(--r-sm);
+}
+
+.insp__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-4);
+  font-weight: 650;
+}
+
+/* Bold name, regular grey count, one baseline. The weight difference is what
+   makes the pair readable as "thing, then detail about it" - and it stays on
+   one line, because "of 1" broken across two reads as two separate facts. */
+.insp__count {
+  flex: none;
+  font-size: var(--fs-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.insp__head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-left: auto;
+}
+
+/* Coloured at rest, not only on hover. It is the one control on this card that
+   cannot be undone, and a destructive control you can only identify by hovering
+   it is one you can also click without meaning to. */
+.insp__delete {
+  color: var(--danger);
+}
+.insp__delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ---------------- what will actually happen ---------------- */
+
+/* The one thing on the card that is a report rather than a control, so it is
+   the one thing sitting in a well. */
+.insp__resolved {
+  padding: var(--s3) var(--s4);
+  background: var(--surface-sunk);
+  border-radius: var(--r-md);
+}
+
+.insp__resolved-line {
+  font-size: var(--fs-3);
+  line-height: 1.4;
+}
+
+.insp__shot {
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.insp__resolved-for {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.insp__clipped {
+  margin-top: var(--s1);
+  font-size: var(--fs-1);
+  line-height: 1.4;
+  color: var(--warn);
+}
+
+/* ================================================================
+ * Fields
+ * ================================================================ */
+
+.insp__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.insp__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+}
+
+.insp__label-name {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/* Everything that is commentary rather than the value: what auto would have
+   picked, where the aim came from. Muted and lighter, so the row reads as one
+   strong word plus an aside. */
+.insp__label-note {
+  font-size: var(--fs-1);
+  font-weight: 400;
+  color: var(--muted);
+  text-align: right;
+}
+
+/* ---------------- mutually exclusive choices ---------------- */
+
+/* The mode toggle and the seven shot types are the same control - they differ
+   in how many there are, not in kind - so they are one class and cannot drift
+   apart the way two paddings do. */
+.insp__choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s1);
+}
+
+.insp__choice {
+  min-height: var(--h-control);
+  padding: 0 var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 550;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--control);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    color var(--t-mid) var(--ease-out),
+    background var(--t-mid) var(--ease-out),
+    border-color var(--t-mid) var(--ease-out),
+    box-shadow var(--t-mid) var(--ease-out);
+}
+.insp__choice:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+.insp__choice:active:not(:disabled) {
+  background: var(--press);
+}
+/* Selected is ink: a near-black border and the heavier weight, no hue. Colour
+   in this app means state or map data, and "this is the one you picked" is
+   neither. */
+.insp__choice[aria-pressed='true'] {
+  color: var(--ink);
+  font-weight: 650;
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+.insp__choice:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.insp__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+/* ================================================================
+ * The typed number
+ *
+ * Sits in the label row, where the read-only value used to be: the number you
+ * were reading and the number you can edit are the same number, so they are
+ * the same piece of screen.
+ * ================================================================ */
+
+.numfield {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+}
+
+/* The label gives way, never the box: a truncated word is still readable and a
+   truncated number is a different number. */
+.numfield__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.numfield__note {
+  margin-left: var(--s2);
+  font-size: var(--fs-1);
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.numfield__box {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s1);
+  padding: 0 var(--s2);
+  background: var(--control);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  transition:
+    background var(--t-mid) var(--ease-out),
+    border-color var(--t-mid) var(--ease-out);
+}
+.numfield__box:hover {
+  background: var(--control-hover);
+}
+.numfield__box:focus-within {
+  border-color: var(--accent);
+}
+/* The ring goes on the box rather than on the bare input, so it surrounds the
+   unit too and does not cut between the number and the "s" it belongs to. */
+.numfield__box:has(.numfield__input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.numfield__input {
+  width: 5ch;
+  min-height: var(--h-control-sm);
+  padding: 0;
+  font-size: var(--fs-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+  background: none;
+  border: none;
+  cursor: text;
+}
+/* Replaced by the ring on the box above, never simply removed. */
+.numfield__input:focus,
+.numfield__input:focus-visible {
+  outline: none;
+}
+
+.numfield__unit {
+  font-size: var(--fs-1);
+  color: var(--muted);
+  user-select: none;
+}
+
+/* ================================================================
+ * Aim dial
+ *
+ * Shape and cursor come from the .dial block in globals.css; what is here is
+ * the paint, which used to be a run of fill= and stroke= attributes on the
+ * SVG nodes themselves - unreachable from a hover or focus state, which is
+ * exactly what the handles needed.
+ * ================================================================ */
+
+/* The one property of .dial itself that belongs to this file, because the
+   reason for it is the field column below: everything else about the dial's
+   box is still the .dial rule in globals.css. */
+.dial {
+  flex-wrap: wrap;
+}
+
+/* Beside the dial where the sidebar is wide enough for it, underneath where it
+   is not - the review screen's sidebar is narrower than the plan screen's, and
+   a compass squeezed to make room for a number field is no longer a compass.
+   The basis is the width the fields need before wrapping is better. */
+.dial__readout {
+  display: flex;
+  flex: 1 1 128px;
+  flex-direction: column;
+  gap: var(--s2);
+  line-height: 1.4;
+}
+
+.dial__auto {
+  align-self: flex-start;
+}
+
+.dial__face {
+  fill: var(--surface-sunk);
+  stroke: var(--line-strong);
+}
+
+/* Quiet enough to read as a shaded sector rather than as a solid black pie -
+   the two rays and the handles are what state the angle. */
+.dial__wedge {
+  fill: var(--accent);
+  fill-opacity: 0.12;
+  stroke: none;
+}
+
+.dial__ray {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.dial__hub {
+  fill: var(--ink);
+}
+
+.dial__handle {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+  transition: stroke-width var(--t-mid) var(--ease-out);
+}
+/* The end of the arc is the hollow one, so which handle is which survives the
+   two of them meeting at a full turn. */
+.dial__handle--to {
+  fill: var(--surface);
+  stroke: var(--accent);
+}
+.dial__handle:hover {
+  stroke-width: 3;
+}
+/* Belt and braces: an outline on an SVG shape is honoured unevenly across
+   browsers, and a handle you can Tab to but cannot see is unusable. */
+.dial__handle:focus-visible {
+  stroke: var(--focus);
+  stroke-width: 3;
+}

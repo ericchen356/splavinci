@@ -18,13 +18,20 @@
  * but what it scales is named per shot, and shots it does nothing for do not
  * show it. See MAGNITUDE.
  *
+ * EVERY NUMBER HERE IS ALSO TYPEABLE
+ * A slider answers "a bit longer" and cannot answer "4.25 seconds", which is
+ * the question you actually have once a cut is timed against something. So each
+ * numeric quantity is a slider paired with a field showing the same number -
+ * see NumberField in AimDial.tsx for why the field commits on blur and Enter
+ * rather than per keystroke.
+ *
  * WHAT THE RESOLVED SHOT LINE IS ALLOWED TO CLAIM
  * `resolveShot` runs before the generator measures the shot against the walls,
  * so on its own it is a proposal, not a report: `fitShotToRoom` may shrink the
  * move, or - where even a motionless camera clips - hold instead. Rendering
  * that proposal as fact is what let the panel promise an orbit the camera never
- * performed. So the generated shot wins whenever one exists, the proposal is
- * labelled as a preview when it does not, and a shot the walls changed says so.
+ * performed. So the generated shot wins whenever one exists, and a shot the
+ * walls changed says so.
  *
  * The SHAPE of the controls below that line follows the generated shot too -
  * which handles the dial has, which quantity the slider names - because those
@@ -37,7 +44,8 @@
  * having the panel reach into a store.
  */
 
-import { AimDial } from './AimDial';
+import { AimDial, NumberField } from './AimDial';
+import { Icon } from '@/components/Icon';
 import {
   EMPHASIS_RANGE,
   SHOT_TYPES,
@@ -63,8 +71,7 @@ export type WaypointPanelProps = {
   /**
    * The shot the generator actually emitted for this waypoint, post wall
    * validation. Null when no current path covers it, which falls the resolved
-   * line back to a live preview - the best answer available at that point, and
-   * marked as such rather than passed off as the generated one.
+   * line back to a live preview - the best answer available at that point.
    */
   generated?: ShotIntent | null;
   /** The `shot-clipped` warning naming this waypoint, if the walls changed it. */
@@ -77,11 +84,9 @@ export type WaypointPanelProps = {
   footer?: React.ReactNode;
 };
 
-const row: React.CSSProperties = { marginBottom: 14 };
-const labelStyle: React.CSSProperties = {
-  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-  fontSize: 12, color: 'var(--muted)', marginBottom: 6,
-};
+/** Seconds. Matches the slider either side of the typed field, so the two
+ *  controls for one number cannot disagree about what is reachable. */
+const DURATION_RANGE = { min: 0.5, max: 15, step: 0.1 } as const;
 
 /**
  * What emphasis scales, per shot - because it is not one quantity.
@@ -128,42 +133,104 @@ export function WaypointPanel({
   const magnitude = MAGNITUDE[shown.shotType];
 
   return (
-    <div
-      style={{
-        background: 'var(--panel)',
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--radius)',
-        padding: 14,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <strong style={{ fontSize: 13 }}>Waypoint {index + 1}</strong>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>of {total}</span>
-        <div style={{ flex: 1 }} />
-        {onReorder && (
-          <>
-            <button title="Move earlier" disabled={index === 0} onClick={() => onReorder(-1)}
-                    style={{ padding: '2px 8px' }}>↑</button>
-            <button title="Move later" disabled={index === total - 1} onClick={() => onReorder(1)}
-                    style={{ padding: '2px 8px' }}>↓</button>
-          </>
+    <section className="insp" aria-label={`Waypoint ${index + 1} of ${total}`}>
+      <header className="insp__head">
+        <span className="insp__step">{index + 1}</span>
+        <h3 className="insp__title">Waypoint</h3>
+        <span className="insp__count">of {total}</span>
+        <div className="insp__head-actions">
+          {onReorder && (
+            <>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Move earlier"
+                aria-label="Move this waypoint earlier"
+                disabled={index === 0}
+                onClick={() => onReorder(-1)}
+              >
+                <Icon name="up" />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Move later"
+                aria-label="Move this waypoint later"
+                disabled={index === total - 1}
+                onClick={() => onReorder(1)}
+              >
+                <Icon name="down" />
+              </button>
+            </>
+          )}
+          {/* Delete is the header control, because closing a panel that is only
+              open because something is selected is not an action worth a button
+              - clicking anywhere else already does it. Where the host screen
+              has no delete to offer (review reopens this panel read-mostly),
+              the close affordance stays rather than leaving a dead corner. */}
+          {onRemove ? (
+            <button
+              type="button"
+              className="icon-btn insp__delete"
+              title="Delete this waypoint"
+              aria-label={`Delete waypoint ${index + 1}`}
+              onClick={() => {
+                onRemove();
+                onClose?.();
+              }}
+            >
+              <Icon name="trash" />
+            </button>
+          ) : (
+            onClose && (
+              <button
+                type="button"
+                className="icon-btn"
+                title="Close"
+                aria-label="Close this panel"
+                onClick={onClose}
+              >
+                <Icon name="close" />
+              </button>
+            )
+          )}
+        </div>
+      </header>
+
+      {/* ---- what will actually happen ---- */}
+      <div className="insp__resolved" title={shown.reason}>
+        <p className="insp__resolved-line">
+          <strong className="insp__shot">{shown.shotType}</strong>
+          <span className="insp__resolved-for"> for </span>
+          <strong className="num">{shown.duration.toFixed(1)}s</strong>
+        </p>
+        {generated && clipped && (
+          <p className="insp__clipped" title={clipped.message}>
+            {replaced
+              ? `${askedFor} clips a wall — ${shown.shotType} instead`
+              : 'tightened to clear the walls'}
+          </p>
         )}
-        {onClose && <button onClick={onClose} style={{ padding: '2px 8px' }}>✕</button>}
       </div>
 
       {/* ---- who decides ---- */}
-      <div style={row}>
-        <div style={labelStyle}><span>Shot</span></div>
-        <div style={{ display: 'flex', gap: 4 }}>
+      <div className="insp__field">
+        <div className="insp__label">
+          <span className="insp__label-name">Shot</span>
+        </div>
+        <div className="insp__choices" role="group" aria-label="Who picks this shot">
           <button
-            className={!manual ? 'primary' : undefined}
+            type="button"
+            className="insp__choice"
+            aria-pressed={!manual}
             onClick={() => onChange({ mode: 'auto' })}
-            style={{ flex: 1, padding: '6px 8px', fontSize: 12 }}
           >
             Auto
           </button>
           <button
-            className={manual ? 'primary' : undefined}
+            type="button"
+            className="insp__choice"
+            aria-pressed={manual}
             // Seed the manual values from what auto just chose, so switching
             // starts from the shot on screen instead of a stale default.
             onClick={() =>
@@ -173,69 +240,28 @@ export function WaypointPanel({
                 duration: Number(preview.duration.toFixed(1)),
               })
             }
-            style={{ flex: 1, padding: '6px 8px', fontSize: 12 }}
           >
             Manual
           </button>
         </div>
       </div>
 
-      {/* ---- what will actually happen ---- */}
-      <div
-        style={{
-          ...row,
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line)',
-          borderRadius: 6,
-          padding: '8px 10px',
-          fontSize: 12,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <div title={shown.reason} style={{ flex: 1, minWidth: 0 }}>
-            <strong style={{ color: 'var(--accent)' }}>{shown.shotType}</strong>
-            <span style={{ color: 'var(--muted)' }}> for </span>
-            <strong>{shown.duration.toFixed(1)}s</strong>
-          </div>
-          <span
-            style={{ fontSize: 10, color: 'var(--muted)', flex: '0 0 auto' }}
-            title={
-              generated
-                ? 'From the generated path — measured against the walls.'
-                : 'Not in a generated path yet — generate to find out what the camera can actually do here.'
-            }
-          >
-            {generated ? 'generated' : 'preview'}
-          </span>
-        </div>
-
-        {generated && clipped && (
-          <div
-            style={{ marginTop: 5, fontSize: 11, color: 'var(--warn)' }}
-            title={clipped.message}
-          >
-            {replaced
-              ? `${askedFor} clips a wall — ${shown.shotType} instead`
-              : 'tightened to clear the walls'}
-          </div>
-        )}
-      </div>
-
       {/* ---- manual parameters, shown only when they apply ---- */}
       {manual && (
         <>
-          <div style={row}>
-            <div style={labelStyle}>
-              <span>Type</span>
-              <span style={{ fontSize: 10 }}>auto would pick {preview.autoShotType}</span>
+          <div className="insp__field">
+            <div className="insp__label">
+              <span className="insp__label-name">Type</span>
+              <span className="insp__label-note">auto suggests {preview.autoShotType}</span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+            <div className="insp__choices" role="group" aria-label="Shot type">
               {SHOT_TYPES.map((shot: ShotType) => (
                 <button
                   key={shot}
+                  type="button"
+                  className="insp__choice"
+                  aria-pressed={waypoint.shotType === shot}
                   onClick={() => onChange({ shotType: shot })}
-                  className={waypoint.shotType === shot ? 'primary' : undefined}
-                  style={{ padding: '5px 4px', fontSize: 11 }}
                 >
                   {shot}
                 </button>
@@ -243,13 +269,24 @@ export function WaypointPanel({
             </div>
           </div>
 
-          <div style={row}>
-            <div style={labelStyle}>
-              <span>Duration</span>
-              <span style={{ color: 'var(--text)' }}>{waypoint.duration.toFixed(1)}s</span>
-            </div>
+          <div className="insp__field">
+            <NumberField
+              label="Duration"
+              value={waypoint.duration}
+              min={DURATION_RANGE.min}
+              max={DURATION_RANGE.max}
+              step={DURATION_RANGE.step}
+              decimals={2}
+              unit="s"
+              onCommit={(duration) => onChange({ duration })}
+            />
             <input
-              type="range" min={0.5} max={15} step={0.1}
+              className="range"
+              type="range"
+              aria-label="Duration"
+              min={DURATION_RANGE.min}
+              max={DURATION_RANGE.max}
+              step={DURATION_RANGE.step}
               value={waypoint.duration}
               onChange={(e) => onChange({ duration: Number(e.target.value) })}
             />
@@ -258,10 +295,10 @@ export function WaypointPanel({
       )}
 
       {/* ---- where the shot points ---- */}
-      <div style={row}>
-        <div style={labelStyle}>
-          <span>{sweeps ? 'Sweep' : 'Facing'}</span>
-          <span style={{ fontSize: 10 }}>{preview.aimExplicit ? 'set by you' : 'auto'}</span>
+      <div className="insp__field">
+        <div className="insp__label">
+          <span className="insp__label-name">{sweeps ? 'Sweep' : 'Facing'}</span>
+          <span className="insp__label-note">{preview.aimExplicit ? 'set by you' : 'auto'}</span>
         </div>
         <AimDial
           aim={preview.aim}
@@ -274,18 +311,26 @@ export function WaypointPanel({
 
       {/* ---- amplitude, named for what this shot actually scales ---- */}
       {magnitude.showMagnitude && (
-        <div style={row}>
-          <div style={labelStyle}>
-            <span title={`${magnitude.label} of this ${shown.shotType}, as a share of the style's own.`}>
-              {magnitude.label}
-            </span>
-            <span style={{ color: 'var(--text)' }}>
-              {Math.round(waypoint.emphasis * 100)}%
-              {Math.abs(waypoint.emphasis - 1) < 0.01 ? ' (style default)' : ''}
-            </span>
-          </div>
+        <div className="insp__field">
+          {/* Typed and shown as a percentage, because that is what it is: a
+              multiplier on the style's own amplitude, not a distance in metres
+              the panel could not honestly quote. */}
+          <NumberField
+            label={magnitude.label}
+            note={Math.abs(waypoint.emphasis - 1) < 0.01 ? 'style default' : undefined}
+            title={`${magnitude.label} of this ${shown.shotType}, as a share of the style's own.`}
+            value={waypoint.emphasis * 100}
+            min={EMPHASIS_RANGE.min * 100}
+            max={EMPHASIS_RANGE.max * 100}
+            step={EMPHASIS_RANGE.step * 100}
+            decimals={1}
+            unit="%"
+            onCommit={(percent) => onChange({ emphasis: percent / 100 })}
+          />
           <input
+            className="range"
             type="range"
+            aria-label={magnitude.label}
             min={EMPHASIS_RANGE.min}
             max={EMPHASIS_RANGE.max}
             step={EMPHASIS_RANGE.step}
@@ -295,20 +340,8 @@ export function WaypointPanel({
         </div>
       )}
 
-      <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>
-        at ({waypoint.position[0].toFixed(2)}, {waypoint.position[2].toFixed(2)})
-        {grid ? ` · ${preview.wallDistance.toFixed(1)} m from the nearest wall` : ''}
-        {waypoint.pinned ? ' · edited' : ''}
-      </div>
-
-      {footer}
-
-      {onRemove && (
-        <button onClick={onRemove} style={{ width: '100%', color: 'var(--danger)' }}>
-          Delete waypoint
-        </button>
-      )}
-    </div>
+      {footer && <div className="insp__footer">{footer}</div>}
+    </section>
   );
 }
 
