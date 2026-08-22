@@ -23,7 +23,7 @@
   "anchor": "Interior of a home, photographed at standing eye level",
   "generation": {
     "model": "marble-1.1",
-    "spz": "500k",
+    "spz": "full_res",
     "tags": [
       "splavinci",
       "sample-scene",
