@@ -21,7 +21,7 @@ import Link from 'next/link';
 import { Canvas } from '@react-three/fiber';
 import { AssetStatusPanel, CameraPresetDriver, RoomScene, derivePresets } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
-import { WaypointPanel } from '@/components/plan/WaypointPanel';
+import { WaypointPanel, generatedShotFor } from '@/components/plan/WaypointPanel';
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
 import { ScrubBar } from '@/components/review/ScrubBar';
 import { useRoomAssets } from '@/lib/scene';
@@ -112,6 +112,12 @@ export default function ReviewPage() {
 
   const editing = waypoints.find((w) => w.id === editingWaypointId) ?? null;
   const editingIndex = waypoints.findIndex((w) => w.id === editingWaypointId);
+  /* The shot the generator emitted for the waypoint being edited, so the panel
+     reports what the camera on this very screen performs rather than what was
+     proposed before the walls were consulted. Withheld while the plan is dirty:
+     the regenerate an edit kicks off has not landed yet, so the shot still in
+     `path` belongs to the plan from before it. */
+  const editingShot = generatedShotFor(path, editingWaypointId, !dirty);
 
   const hasPath = frames.length > 0;
   /* The path on screen is not the plan any more: the mini-map is drawing new
@@ -462,6 +468,8 @@ export default function ReviewPage() {
               total={waypoints.length}
               grid={grid}
               style={settings.style}
+              generated={editingShot.intent}
+              clipped={editingShot.clipped}
               onChange={applyEdit}
               onClose={() => editWaypoint(null)}
               footer={

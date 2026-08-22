@@ -28,7 +28,7 @@ import {
 } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
-import { WaypointPanel } from '@/components/plan/WaypointPanel';
+import { WaypointPanel, generatedShotFor } from '@/components/plan/WaypointPanel';
 import { shotPreviewPoints } from '@/components/plan/shotPreview';
 import type { WaypointAim } from '@/components/plan/MiniMap';
 import { useRoomAssets } from '@/lib/scene';
@@ -179,6 +179,12 @@ export default function PlanPage() {
 
   const errors = path?.warnings.filter((w) => w.severity === 'error') ?? [];
   const notices = path?.warnings.filter((w) => w.severity !== 'error') ?? [];
+
+  /* What the generator emitted for the selected waypoint, so the panel reports
+     the shot that was validated against the walls rather than the one proposed
+     before they were consulted. Nothing while `dirty`: this screen does not
+     regenerate on edit, so after one the last path is about a different plan. */
+  const selectedShot = generatedShotFor(path, selectedId, !dirty);
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
@@ -335,6 +341,8 @@ export default function PlanPage() {
               total={waypoints.length}
               grid={grid}
               style={settings.style}
+              generated={selectedShot.intent}
+              clipped={selectedShot.clipped}
               onChange={(patch) => updateWaypoint(selected.id, patch)}
               onRemove={() => removeWaypoint(selected.id)}
               onReorder={(d) => reorderWaypoint(selected.id, d)}
