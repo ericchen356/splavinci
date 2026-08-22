@@ -412,7 +412,8 @@ export function resolveShot(
     targetPoint[2] - waypoint.position[2],
     targetPoint[0] - waypoint.position[0],
   );
-  const derivedSweep = DEFAULT_PAN_SWEEP * intensity;
+  // Not scaled by intensity: the dial owns the arc, move size owns distance.
+  const derivedSweep = DEFAULT_PAN_SWEEP;
   const aim: ShotAim = waypoint.aim ?? {
     from: bearing - derivedSweep / 2,
     sweep: derivedSweep,

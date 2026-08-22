@@ -27,6 +27,14 @@ import { type WalkGrid } from '@/lib/path';
 import { CLICK_SLOP_PX } from '@/components/scene/pointer';
 import { buildPlanLayer, DEFAULT_PLAN_COLOURS, strokeSegments } from './blueprint';
 
+export type WaypointAim = {
+  id: string;
+  /** Absolute bearing, atan2(dz, dx). */
+  from: number;
+  /** Signed arc. Zero for shots that only face a direction. */
+  sweep: number;
+};
+
 export type MiniMapProps = {
   grid: WalkGrid | null;
   waypoints?: readonly Waypoint[];
@@ -36,6 +44,13 @@ export type MiniMapProps = {
   /** Live camera pose - draws a dot with a facing arrow. */
   camera?: { position: Vec3; lookAt: Vec3 } | null;
   comments?: readonly Comment[];
+  /**
+   * Where each waypoint's shot points, and how far it swings.
+   *
+   * Drawn on the map because that is where the room is: a bearing in a number
+   * field says nothing about whether it faces a wall.
+   */
+  aims?: readonly WaypointAim[];
   /** Where the selected waypoint's shot will take the camera, drawn dashed.
    *  See components/plan/shotPreview.ts. */
   shotPreview?: readonly Vec3[];
@@ -59,6 +74,7 @@ export type MiniMapProps = {
 /** Shared default, so a screen that passes no preview does not hand `draw` a
  *  fresh array - and a fresh dependency - on every render. */
 const NO_POINTS: readonly Vec3[] = [];
+const NO_AIMS: readonly WaypointAim[] = [];
 
 /** A press in progress, from pointerdown to pointerup. */
 type Gesture = {
@@ -154,6 +170,7 @@ export function MiniMap({
   polyline = [],
   camera = null,
   comments = [],
+  aims = NO_AIMS,
   shotPreview = NO_POINTS,
   onPick,
   onWaypointPick,
@@ -256,6 +273,36 @@ export function MiniMap({
       });
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    /* where each shot points, under the markers so it never hides a number */
+    for (const w of waypoints) {
+      const aim = aims.find((a) => a.id === w.id);
+      if (!aim) continue;
+      const { sx, sy } = proj.toScreen(w.position[0], w.position[2]);
+      const selected = w.id === selectedId;
+      const reach = selected ? 46 : 26;
+
+      if (Math.abs(aim.sweep) > 1e-3) {
+        // The arc the camera actually sweeps, as a wedge rooted at the marker.
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.arc(sx, sy, reach, aim.from, aim.from + aim.sweep, aim.sweep < 0);
+        ctx.closePath();
+        ctx.fillStyle = selected ? 'rgba(255,180,84,0.30)' : 'rgba(255,180,84,0.14)';
+        ctx.fill();
+        ctx.strokeStyle = selected ? 'rgba(255,180,84,0.9)' : 'rgba(255,180,84,0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else {
+        // No swing: a single tick showing which way it faces.
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + Math.cos(aim.from) * reach, sy + Math.sin(aim.from) * reach);
+        ctx.strokeStyle = selected ? 'rgba(255,180,84,0.9)' : 'rgba(255,180,84,0.45)';
+        ctx.lineWidth = selected ? 2 : 1.5;
+        ctx.stroke();
+      }
     }
 
     /* waypoints, numbered in travel order */

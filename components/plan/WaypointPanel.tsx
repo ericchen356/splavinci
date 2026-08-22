@@ -187,7 +187,7 @@ export function WaypointPanel({
       {/* ---- emphasis: meaningful in both modes ---- */}
       <div style={row}>
         <div style={labelStyle}>
-          <span title="How far the camera travels during the shot: the sweep of an orbit, the reach of a push-in.">
+          <span title="How far the camera travels: the reach of a push-in, the lift of a rise, the drift through a pan. The arc of a sweep is set on the dial above.">
             Move size
           </span>
           <span style={{ color: 'var(--text)' }}>

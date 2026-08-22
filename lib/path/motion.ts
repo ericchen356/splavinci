@@ -33,7 +33,15 @@ export type ShotContext = {
 
 export type CameraSample = { position: THREE.Vector3; lookAt: THREE.Vector3 };
 
-/** Amplitude constants, in metres or radians at intensity 1. */
+/**
+ * Amplitude constants, in metres or radians.
+ *
+ * Intensity scales the DISTANCE terms only. The angular ones are owned by the
+ * aim dial, because two controls for one quantity is worse than either: move
+ * size used to widen a pan's arc, the dial set it outright, and the moment the
+ * dial was touched move size silently stopped doing anything to it. Angle is
+ * the dial's, distance is move size's, and neither reaches into the other.
+ */
 const AMPLITUDE = {
   orbitSweep: (110 * Math.PI) / 180,
   panSweep: (75 * Math.PI) / 180,
@@ -122,7 +130,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
       const start = Math.atan2(anchor.z - centre.z, anchor.x - centre.x);
       const angle = ctx.aim && Math.abs(ctx.aim.sweep) > 1e-4
         ? start + ctx.aim.sweep * (t - 0.5)
-        : start + (t - 0.5) * AMPLITUDE.orbitSweep * k;
+        : start + (t - 0.5) * AMPLITUDE.orbitSweep;
       return {
         position: new THREE.Vector3(
           centre.x + Math.cos(angle) * orbitRadius,
@@ -181,7 +189,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
       const base = hasTarget ? toTarget.clone() : ctx.tangent.clone().multiplyScalar(distance);
       if (base.lengthSq() < 1e-6) base.set(0, 0, distance);
-      const angle = (t - 0.5) * AMPLITUDE.panSweep * k;
+      const angle = (t - 0.5) * AMPLITUDE.panSweep;
       const swept = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
       return {
         position: eye,

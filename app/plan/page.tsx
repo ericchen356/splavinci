@@ -30,12 +30,14 @@ import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { shotPreviewPoints } from '@/components/plan/shotPreview';
+import type { WaypointAim } from '@/components/plan/MiniMap';
 import { useRoomAssets } from '@/lib/scene';
 import {
   cellIndex,
   cellToWorld,
   findNearestCell,
   getWalkGrid,
+  resolveShot,
   reachableMask,
   resolveCameraRadius,
   worldToCell,
@@ -159,6 +161,17 @@ export default function PlanPage() {
   /* The selected waypoint's shot, resolved and sampled without generating, so
      the emphasis slider has something to move. Cheap enough to redo per tick:
      no A*, no curve, 24 samples. */
+  /* Every waypoint's resolved aim, so the map can show where each shot points
+     and how far it swings - the thing a bearing in a number field cannot say. */
+  const aims = useMemo<WaypointAim[]>(() => {
+    if (!grid) return [];
+    return waypoints.map((w) => {
+      const intent = resolveShot(w, grid, settings.style);
+      const swings = intent.shotType === 'pan' || intent.shotType === 'orbit';
+      return { id: w.id, from: intent.aim.from, sweep: swings ? intent.aim.sweep : 0 };
+    });
+  }, [waypoints, grid, settings.style]);
+
   const shotPreview = useMemo(
     () => (selectedIndex >= 0 ? shotPreviewPoints(waypoints, selectedIndex, grid, settings.style) : []),
     [waypoints, selectedIndex, grid, settings.style],
@@ -193,6 +206,7 @@ export default function PlanPage() {
             cameraRadius={camera?.radius}
             waypoints={waypoints}
             selectedId={selectedId}
+            aims={aims}
             polyline={path?.polyline ?? []}
             shotPreview={shotPreview}
             camera={pose}
