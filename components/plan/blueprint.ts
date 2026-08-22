@@ -15,6 +15,7 @@
  */
 
 import { cellIndex, reachableMask, type WalkGrid } from '@/lib/path';
+import { theme, toRgb } from '@/components/theme';
 
 export type PlanColours = {
   /** Open floor the camera can actually get to. */
@@ -26,17 +27,36 @@ export type PlanColours = {
   wallOutline: string;
 };
 
-export const DEFAULT_PLAN_COLOURS: PlanColours = {
-  // Reads clearly against --bg (#0d0f12) instead of vanishing into it.
-  floor: '#1d2b3d',
-  // Visibly surveyed, visibly not somewhere you can send the camera. Left
-  // unpainted it would look identical to unsurveyed space, which is the thing
-  // that made the map read as vague blobs in the first place.
-  unreachable: '#241f2b',
-  wall: '#5b6b80',
-  outline: '#6ea8fe',
-  wallOutline: '#93a7bf',
-};
+/**
+ * The plan palette, from the app's own token block.
+ *
+ * These were five hardcoded hexes, and the values in them did not actually do
+ * what the comment above claims: the old floor (#1d2b3d) sat at 1.35:1 against
+ * the old page colour, which is not "real contrast against the page" — it is
+ * the same invisible fill the rewrite was meant to fix, a shade lighter.
+ *
+ * The token block carries measured values instead: open floor clears 3.13:1
+ * against unsurveyed space, the wall outline clears 3.77:1 against the floor it
+ * bounds, and wall mass is a step DARKER than the floor rather than lighter, so
+ * the map reads the way a floor plan does — solid is dark, open is light — and
+ * the route and aim strokes drawn on top land on dark mass instead of competing
+ * with a light fill.
+ */
+export function planColours(): PlanColours {
+  const t = theme();
+  return {
+    floor: t.mapFloor,
+    // Visibly surveyed, visibly not somewhere you can send the camera. Left
+    // unpainted it would look identical to unsurveyed space, which is the thing
+    // that made the map read as vague blobs in the first place. It is also the
+    // only region without the accent outline, so the distinction is not
+    // carried by colour alone.
+    unreachable: t.mapFloorCut,
+    wall: t.mapWall,
+    outline: t.mapOpenLine,
+    wallOutline: t.mapWallLine,
+  };
+}
 
 export type PlanProjection = {
   toScreen(x: number, z: number): { sx: number; sy: number };
@@ -111,7 +131,7 @@ export function contentExtent(grid: WalkGrid): ContentExtent {
 export function renderPlanFill(
   grid: WalkGrid,
   extent: ContentExtent,
-  colours = DEFAULT_PLAN_COLOURS,
+  colours = planColours(),
   /** Cells the camera can reach. Everything else open is drawn as cut off. */
   reachable?: Uint8Array | null,
 ): HTMLCanvasElement | null {
@@ -125,9 +145,9 @@ export function renderPlanFill(
   if (!ctx) return null;
 
   const image = ctx.createImageData(w, h);
-  const floorRgb = hexToRgb(colours.floor);
-  const wallRgb = hexToRgb(colours.wall);
-  const cutOffRgb = hexToRgb(colours.unreachable);
+  const floorRgb = toRgb(colours.floor);
+  const wallRgb = toRgb(colours.wall);
+  const cutOffRgb = toRgb(colours.unreachable);
 
   for (let r = extent.r0; r <= extent.r1; r++) {
     for (let c = extent.c0; c <= extent.c1; c++) {
@@ -219,7 +239,7 @@ export type PlanLayer = {
 
 export function buildPlanLayer(
   grid: WalkGrid,
-  colours = DEFAULT_PLAN_COLOURS,
+  colours = planColours(),
   /** Camera radius. Omit to treat every open cell as reachable. */
   radius?: number,
 ): PlanLayer {
@@ -240,10 +260,4 @@ export function buildPlanLayer(
     reachableCells: reach?.cells ?? 0,
     regions: reach?.regions ?? 0,
   };
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  const v = parseInt(h.length === 3 ? h.split('').map((ch) => ch + ch).join('') : h, 16);
-  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }

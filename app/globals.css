@@ -1,80 +1,1314 @@
+/* ================================================================
+ * splavinci — design tokens
+ *
+ * Everything visual comes from a token. Nothing below the token block should
+ * contain a raw colour, a bare pixel padding or a hand-picked font size,
+ * because those are exactly the values that drift apart when they are re-picked
+ * per component.
+ *
+ * WHY THE CHROME IS DARK
+ * The content on both screens is a photoreal Gaussian splat render, and on
+ * /review it is a moving image the user is judging before exporting it. Every
+ * tool where someone assesses an image — Resolve, Premiere, After Effects,
+ * Unreal, Blender — surrounds it with a dark, near-neutral field, because a
+ * bright surround shifts the perceived exposure and colour of the image sitting
+ * in it, and because a dark viewport inside light chrome reads as a hole rather
+ * than as the subject. Figma goes the other way, but Figma's canvas is artwork
+ * the user is drawing, not a photograph they are grading.
+ *
+ * So the greys here are deliberately achromatic — saturation under 4% across
+ * the whole ramp — so the chrome adds no colour cast to the capture. The splat
+ * is the only saturated thing on screen. One blue accent carries focus,
+ * selection and links; green, amber and red carry state and nothing else.
+ *
+ * Every text pair below was measured, not eyeballed. Body text clears 4.5:1
+ * against every surface it can land on, and control borders, focus rings and
+ * the map's own regions clear 3:1.
+ * ================================================================ */
+
 :root {
-  --bg: #0d0f12;
-  --panel: #16191f;
-  --panel-2: #1d222a;
-  --line: #2a3038;
-  --text: #e8eaed;
-  --muted: #98a2b0;
-  --accent: #6ea8fe;
-  --accent-dim: #35507d;
-  --warn: #ffb454;
-  --danger: #ff6b6b;
-  --radius: 8px;
+  color-scheme: light;
+
+  /* ---- ground & surfaces ----
+     Four steps, and no more: the app background, the panels on it, the
+     controls in those panels, and the wells controls sit in. */
+  --ground: #f3f3f6;
+  --surface: #ffffff;
+  --surface-sunk: #eeeef2;
+  --control: #ffffff;
+  --control-hover: #f2f2f5;
+  --hover: rgba(22, 22, 26, 0.05);
+  --press: rgba(22, 22, 26, 0.09);
+
+  /* ---- text ----
+     Measured on --surface: ink 17.9:1 · ink-soft 9.1:1 · muted 5.0:1. */
+  --ink: #16161a;
+  --ink-soft: #4a4a55;
+  --muted: #6b6b77;
+
+  /* ---- lines ----
+     --line is decorative: panel edges, dividers, list separators.
+     --line-strong is structural - it is the boundary that MAKES a control read
+     as a control - so it is pinned above 3:1 on --surface rather than left as
+     a hairline. A button whose edge you cannot find is not a button. */
+  --line: rgba(22, 22, 26, 0.11);
+  --line-strong: rgba(22, 22, 26, 0.48);
+
+  /* ---- accent ----
+     One blue, carrying focus, selection and links and nothing else. */
+  --accent: #2e6ecb;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(46, 110, 203, 0.10);
+  --accent-line: rgba(46, 110, 203, 0.45);
+  --focus: #2e6ecb;
+
+  /* ---- state ----
+     Darkened from the dark-theme versions: the same hues at their previous
+     lightness fail against white. */
+  --success: #2f7350;
+  --success-soft: rgba(47, 115, 80, 0.12);
+  --warn: #8a5a12;
+  --warn-soft: rgba(214, 165, 52, 0.16);
+  --warn-line: rgba(160, 116, 30, 0.36);
+  --danger: #bf372d;
+  --danger-soft: rgba(191, 55, 45, 0.10);
+  --danger-line: rgba(191, 55, 45, 0.32);
+
+  /* ---- elevation ----
+     Two, and only for things that genuinely float over the 3D viewport. A
+     panel inside the sidebar is separated by a border, not by a shadow. */
+  --shadow-1: 0 1px 2px rgba(22, 22, 26, 0.05), 0 1px 3px rgba(22, 22, 26, 0.05);
+  --shadow-2: 0 2px 6px rgba(22, 22, 26, 0.06), 0 12px 32px rgba(22, 22, 26, 0.12);
+
+  /* ---- radii
+     Small on purpose. This is a dense instrument panel; a 16px corner on a
+     26px button turns it into a lozenge. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* ---- spacing (4pt rhythm) ---- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+
+  /* ---- type ----
+     Six sizes. Nothing in the app is allowed to invent a seventh, and nothing
+     goes below --fs-1: 10px labels were unreadable on the capture picker. */
+  --fs-1: 11.5px;
+  --fs-2: 12.5px;
+  --fs-3: 13.5px;
+  --fs-4: 15px;
+  --fs-5: 20px;
+  --fs-6: 26px;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ---- motion ----
+     Three durations, chosen by how far something travels: a state flip, a
+     panel opening, something arriving from off-screen. */
+  --t-fast: 100ms;
+  --t-mid: 180ms;
+  --t-slow: 280ms;
+  --ease-out: cubic-bezier(0.22, 0.78, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.5, 0, 0.3, 1);
+
+  /* ---- sizing ----
+     One control height for the whole app, so rows line up without per-component
+     margins. 30px sits comfortably above the 24px WCAG 2.2 target minimum for
+     pointer inputs; the compact variant is exactly 26px and never smaller. */
+  --h-control: 30px;
+  --h-control-sm: 26px;
+  --w-sidebar: 344px;
+  --h-nav: 44px;
+
+  /* ---- layers ---- */
+  --z-overlay: 10;
+  --z-chrome: 50;
+
+  /* ================================================================
+   * Values the <canvas> and WebGL read.
+   *
+   * Canvas 2D and three.js cannot resolve custom properties, so
+   * components/theme.ts reads this group once through getComputedStyle and
+   * hands the strings to fillStyle / THREE.Color. Keep them plain hex:
+   * THREE.Color parses hex and rgb(), never rgba().
+   * ================================================================ */
+
+  /* The mini-map is a drawing, not imagery, so it is lit like a printed floor
+     plan: open floor is the lightest region, wall mass is the darkest, and
+     unsurveyed space sits between them as a flat grey that reads as "no data"
+     rather than as room. That ordering is what makes it scan as rooms and
+     hallways instead of as a field of coloured cells.
+
+     Measured: floor vs unsurveyed 1.42:1 by luminance but separated by the
+     wall outline; wall vs floor 8.9:1 · route vs floor 5.0:1 ·
+     aim vs floor 4.4:1 · camera dot vs floor 17.4:1. */
+  --map-ground: #e4e4ea;
+  --map-floor: #ffffff;
+  --map-floor-cut: #dcdbe3;
+  --map-wall: #454b56;
+  --map-wall-line: #272c34;
+  --map-open-line: #2e6ecb;
+  --map-route: #2e6ecb;
+  --map-aim: #a86b12;
+  --map-camera: #16161a;
+
+  /* Markers, in the map and in the 3D scene. In 3D they sit over arbitrary
+     photographic content, so they carry a light core and a dark rim to stay
+     legible against either a bright wall or a dark corner. */
+  --marker: #2e6ecb;
+  --marker-selected: #16437f;
+  --marker-ink: #ffffff;
+  --marker-ink-inverse: #16161a;
+  --marker-fill: #ffffff;
+
+  /* Scene lighting. Not UI colour — a cool key and a warm bounce, so overlay
+     geometry reads against the splat cloud without tinting it. */
+  --scene-sky: #dfe7f5;
+  --scene-bounce: #2a2620;
 }
 
-* { box-sizing: border-box; }
+/* Dark only, on purpose.
+   There is no prefers-color-scheme: light block and there should not be one.
+   The reason the chrome is dark is stated at the top of this file: it is about
+   how a photoreal render is perceived, not about a user's OS preference. A
+   light palette here would put the tool in a surround that fights the thing it
+   exists to show, so the app pins the theme the way a video editor does. */
 
-html, body {
+/* ================================================================
+ * Reset & base
+ * ================================================================ */
+
+*,
+*::before,
+*::after {
   margin: 0;
   padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
   height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-3);
+  line-height: 1.5;
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+h1,
+h2,
+h3 {
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.011em;
+  text-wrap: balance;
+}
 
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-radius: var(--r-xs);
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* A bare <button> gets the control treatment by DEFAULT rather than being
+   stripped to nothing. The reset that removed borders assumed every call site
+   would opt back in via .btn; the ones that had not yet migrated rendered as
+   floating text with no affordance at all. Defaulting to a real control means
+   a missed migration degrades to "correct but unrefined" instead of "broken".
+   Opt out with .btn--ghost where a borderless control is genuinely wanted. */
 button {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 6px 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: var(--h-control);
+  padding: 0 var(--s3);
+  font-size: var(--fs-2);
+  color: var(--ink);
+  background: var(--control);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
   cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
 }
-button:hover:not(:disabled) { border-color: var(--accent-dim); background: #232932; }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
-button.primary { background: var(--accent-dim); border-color: var(--accent); }
-button.primary:hover:not(:disabled) { background: #3d5c91; }
+button:hover:not(:disabled) { background: var(--control-hover); }
+button:active:not(:disabled) { background: var(--press); }
 
-input[type="range"] { accent-color: var(--accent); width: 100%; }
-input[type="text"], textarea, select {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
-  width: 100%;
+/* The selected option in a group.
+   Components mark selection with `primary`; the class was not defined after
+   the restyle, so the active capture, camera preset and style all rendered
+   identically to the inactive ones. Selection reads through a tinted fill, a
+   coloured border and heavier text rather than an inverted slab, which would
+   drop a hard block of colour into an otherwise quiet panel. */
+button.primary,
+.btn.primary {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: rgba(46, 110, 203, 0.16);
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+canvas {
+  display: block;
+}
+
+/* One focus ring for the whole app. Never removed, only replaced — a control
+   you can reach with Tab but cannot see is unusable, and it is the single most
+   common accessibility regression in a redesign.
+
+   The 2px offset matters: it puts the ring on the panel behind the control
+   rather than against the control's own fill, so the ring keeps its 9.74:1
+   even on the one button that is filled with the accent colour. */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Slim scrollbars: both sidebars scroll, and a full-width platform bar in a
+   344px column is a visible chunk of the panel. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background-clip: content-box;
+}
+
+/* ================================================================
+ * Shell
+ * ================================================================ */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.app-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .app-nav {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 12px;
-  height: 44px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  gap: var(--s1);
   flex: 0 0 auto;
+  height: var(--h-nav);
+  padding: 0 var(--s3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
-.app-nav .brand {
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  margin-right: 12px;
-  color: var(--text);
-}
-.app-nav .brand:hover { text-decoration: none; }
-.app-nav a.tab {
-  color: var(--muted);
-  padding: 6px 10px;
-  border-radius: 6px;
-}
-.app-nav a.tab:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
 
-.app-shell { display: flex; flex-direction: column; height: 100vh; }
-.app-body { flex: 1 1 auto; min-height: 0; position: relative; }
+.app-nav__brand {
+  margin-right: var(--s3);
+  padding: var(--s1) 0;
+  font-size: var(--fs-3);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.app-nav__brand:hover {
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.app-nav__tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--h-control);
+  padding: 0 var(--s3);
+  font-size: var(--fs-3);
+  font-weight: 550;
+  color: var(--muted);
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.app-nav__tab:hover {
+  color: var(--ink);
+  background: var(--hover);
+  text-decoration: none;
+}
+/* The current screen, stated rather than implied. Colour is not the only
+   signal — aria-current carries it for anything that is not looking. */
+.app-nav__tab[aria-current='page'] {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+/* ================================================================
+ * Workspace — viewport + sidebar, on both screens
+ * ================================================================ */
+
+.workspace {
+  display: flex;
+  height: 100%;
+}
+
+.viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.player {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sidebar {
+  flex: 0 0 var(--w-sidebar);
+  width: var(--w-sidebar);
+  padding: var(--s3);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.transport {
+  flex: 0 0 auto;
+  padding: var(--s3);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+/* ================================================================
+ * Layout helpers
+ *
+ * Deliberately few. These exist so a row of buttons is spaced the same on
+ * every screen, not so components can be assembled out of utility classes.
+ * ================================================================ */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.row--tight {
+  gap: var(--s1);
+}
+.row--wrap {
+  flex-wrap: wrap;
+}
+.row--baseline {
+  align-items: baseline;
+}
+
+.stack {
+  display: grid;
+  gap: var(--s1);
+}
+.stack--loose {
+  gap: var(--s2);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s1);
+}
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--s1);
+}
+
+.section {
+  margin-bottom: var(--s4);
+}
+
+/* Sentence case, not shouted caps. A section label is read, and letter-spaced
+   uppercase is measurably slower to read than the same words in sentence case
+   — the size and weight already mark it as a header. */
+.section__label {
+  margin-bottom: var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.section__label--between {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+/* ================================================================
+ * Type helpers
+ * ================================================================ */
+
+.meta {
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.meta--tight {
+  line-height: 1.4;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.tc {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.strong-ink {
+  color: var(--ink);
+}
+.accent-ink {
+  color: var(--accent);
+}
+.warn-ink {
+  color: var(--warn);
+}
+.danger-ink {
+  color: var(--danger);
+}
+
+/* ================================================================
+ * Buttons
+ * ================================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: var(--h-control);
+  padding: 0 var(--s3);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--control);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.btn:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--accent-line);
+  text-decoration: none;
+}
+.btn:active:not(:disabled) {
+  background: var(--press);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+
+/* Exactly one primary per view: the highest-contrast thing on screen, which is
+   what makes "what do I do next" answerable at a glance. */
+.btn--primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+.btn--primary:hover:not(:disabled) {
+  background: #86b6ff;
+  border-color: #86b6ff;
+}
+
+.btn--danger {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+.btn--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(243, 118, 110, 0.22);
+  border-color: var(--danger);
+}
+
+/* Quiet: used where a bordered button would clutter a dense row. */
+.btn--ghost {
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+.btn--ghost:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+  border-color: transparent;
+}
+
+.btn--sm {
+  min-height: var(--h-control-sm);
+  padding: 0 var(--s2);
+  font-size: var(--fs-1);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn--grow {
+  flex: 1 1 auto;
+}
+
+/* Icon-only. Square, never below the 24px pointer-target minimum, and every
+   instance carries an aria-label — the glyph is not the name. */
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--h-control-sm);
+  height: var(--h-control-sm);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+.icon-btn:disabled {
+  opacity: 0.4;
+}
+.icon-btn--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ================================================================
+ * Option buttons
+ *
+ * The repeated pattern on both screens: a set of mutually exclusive choices,
+ * each a short label with an optional detail line under it. Camera presets,
+ * path styles, captures, splat densities, shot types and the waypoint list are
+ * all this control, so they are all this class — they were six different
+ * paddings before.
+ *
+ * Selection is carried by aria-pressed, so the state is announced and not only
+ * seen, and it reads through fill + border + a left marker rather than by
+ * colour alone.
+ * ================================================================ */
+
+.opt {
+  display: block;
+  width: 100%;
+  min-height: var(--h-control);
+  padding: var(--s1) var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 550;
+  text-align: left;
+  color: var(--ink-soft);
+  background: var(--control);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.opt:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--control-hover);
+  border-color: var(--accent-line);
+}
+.opt:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.opt[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.opt--centre {
+  text-align: center;
+}
+.opt--compact {
+  min-height: var(--h-control-sm);
+  font-size: var(--fs-1);
+  padding: 0 var(--s1);
+  text-align: center;
+}
+.opt--pending {
+  border-color: var(--warn);
+}
+
+.opt__label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opt__detail {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--fs-1);
+  font-weight: 450;
+  color: var(--muted);
+}
+
+/* ================================================================
+ * Fields
+ * ================================================================ */
+
+.field {
+  margin-bottom: var(--s3);
+}
+
+.field__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  font-size: var(--fs-2);
+  color: var(--muted);
+}
+
+.field__value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.input,
+.textarea {
+  display: block;
+  width: 100%;
+  min-height: var(--h-control);
+  padding: var(--s1) var(--s2);
+  font: inherit;
+  font-size: var(--fs-2);
+  color: var(--ink);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  transition: border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
+}
+.textarea {
+  padding: var(--s2);
+  line-height: 1.5;
+  resize: vertical;
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--muted);
+}
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:focus-visible,
+.textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Range inputs are the two most-used controls in the waypoint panel, and the
+   native thumb is 12px on some platforms. Drawn explicitly so the grab target
+   is 16px and the focus ring lands on the thumb. */
+.range {
+  display: block;
+  width: 100%;
+  height: var(--h-control-sm);
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.range:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--control-hover);
+  border-radius: var(--r-pill);
+}
+.range::-moz-range-track {
+  height: 4px;
+  background: var(--control-hover);
+  border-radius: var(--r-pill);
+}
+.range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  border-radius: var(--r-pill);
+}
+.range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  border-radius: var(--r-pill);
+}
+.range:focus-visible {
+  outline: none;
+}
+.range:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.range:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A checkbox row. The whole row is the label, so the hit target is the width
+   of the panel rather than the 15px box. */
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: var(--h-control-sm);
+  padding: 0 var(--s1);
+  margin: 0 calc(-1 * var(--s1));
+  font-size: var(--fs-2);
+  color: var(--ink-soft);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+.check:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+.check input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ================================================================
+ * Surfaces
+ * ================================================================ */
+
+.card {
+  padding: var(--s3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.card--tight {
+  padding: var(--s2);
+}
+
+.well {
+  padding: var(--s2) var(--s3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+/* Inline state messages. All four share a shape so they read as one family,
+   and each states its severity in text as well as in colour. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  padding: var(--s2) var(--s3);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  border: 1px solid;
+  border-radius: var(--r-sm);
+}
+.notice__icon {
+  flex: none;
+  margin-top: 1px;
+}
+.notice__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.notice--error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+}
+.notice--warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+}
+.notice--info {
+  color: var(--ink-soft);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* ================================================================
+ * Things that float over the 3D viewport
+ *
+ * Opaque, not translucent. A blurred translucent panel over a moving photoreal
+ * render is unreadable on the frames where the render happens to be bright, and
+ * it costs a full-screen backdrop filter on the canvas that /review is
+ * capturing in real time.
+ * ================================================================ */
+
+.overlay {
+  position: absolute;
+  z-index: var(--z-overlay);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+}
+
+.overlay--top-left {
+  top: var(--s3);
+  left: var(--s3);
+}
+.overlay--top-right {
+  top: var(--s3);
+  right: var(--s3);
+}
+.overlay--bottom-left {
+  bottom: var(--s3);
+  left: var(--s3);
+}
+
+.overlay__pad {
+  padding: var(--s2) var(--s3);
+  font-size: var(--fs-2);
+}
+
+.stage__notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  text-align: center;
+  font-size: var(--fs-3);
+  color: var(--muted);
+}
+
+/* ================================================================
+ * Mini-map
+ * ================================================================ */
+
+.minimap {
+  width: 100%;
+}
+
+.minimap__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2) var(--s2);
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+
+.minimap__title {
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+/* The border lives on the frame, not on the canvas: the draw code sizes the
+   canvas from clientWidth, and a border-box border on the canvas itself makes
+   the backing store 2px wider than the box it is painted into. */
+.minimap__frame {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  line-height: 0;
+}
+
+.minimap__canvas {
+  display: block;
+  /* A touch drag has to move the marker, not scroll the page. */
+  touch-action: none;
+}
+
+/* On /plan the map floats over the viewport, so it gets a panel of its own.
+   Without one it is a rectangle of diagram sitting directly on a photograph,
+   with nothing to say where the render stops and the instrument starts. */
+.minimap-dock {
+  width: 316px;
+  padding: var(--s2);
+}
+
+/* ================================================================
+ * Aim dial
+ * ================================================================ */
+
+.dial {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.dial__svg {
+  flex: none;
+  touch-action: none;
+}
+
+.dial__handle {
+  cursor: grab;
+}
+.dial__handle:active {
+  cursor: grabbing;
+}
+
+.dial__readout {
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* ================================================================
+ * Scrub bar
+ * ================================================================ */
+
+.scrub {
+  position: relative;
+  height: 34px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  touch-action: none;
+  cursor: pointer;
+}
+.scrub[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.scrub--idle {
+  cursor: default;
+}
+.scrub:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.scrub__seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+}
+.scrub__seg--travel {
+  background: rgba(110, 168, 254, 0.05);
+}
+.scrub__seg--split {
+  border-left: 1px solid var(--accent-line);
+}
+
+.scrub__elapsed {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(110, 168, 254, 0.26);
+  pointer-events: none;
+}
+
+.scrub__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+  pointer-events: none;
+}
+
+.scrub__head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  pointer-events: none;
+}
+
+/* ================================================================
+ * Waypoint list
+ * ================================================================ */
+
+.waypoint-list {
+  display: grid;
+  gap: var(--s1);
+  list-style: none;
+}
+
+.waypoint__index {
+  display: inline-block;
+  min-width: 1.4em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.waypoint__coords {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================
+ * Comments
+ * ================================================================ */
+
+.comment {
+  margin-bottom: var(--s2);
+  padding: var(--s2);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.comment__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s1);
+}
+
+.comment__text {
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+/* ================================================================
+ * Asset status
+ * ================================================================ */
+
+.assets__row {
+  display: flex;
+  gap: var(--s2);
+  align-items: baseline;
+  font-size: var(--fs-2);
+}
+
+.assets__dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+}
+
+.assets__name {
+  flex: none;
+  width: 60px;
+  color: var(--ink);
+}
+
+.assets__detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ================================================================
+ * Hub
+ * ================================================================ */
+
+.hub {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--s8) var(--s6);
+}
+
+.hub__title {
+  font-size: var(--fs-6);
+  margin-bottom: var(--s1);
+}
+
+.hub__lede {
+  margin-bottom: var(--s6);
+  font-size: var(--fs-4);
+  color: var(--muted);
+}
+
+.hub__list {
+  display: grid;
+  gap: var(--s2);
+}
+
+.hub__card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  transition: background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+.hub__card:hover {
+  background: var(--control);
+  border-color: var(--accent-line);
+  text-decoration: none;
+}
+
+.hub__step {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  font-size: var(--fs-2);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-pill);
+}
+
+.hub__name {
+  display: block;
+  font-size: var(--fs-4);
+  font-weight: 650;
+}
+
+.hub__body {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.hub__chev {
+  color: var(--muted);
+}
+
+/* ================================================================
+ * Reduced motion
+ *
+ * Everything animated in this file is a hover or state hint. None of it
+ * carries information on its own, so all of it is dropped rather than
+ * shortened. The 3D viewport is content, not decoration, and is untouched:
+ * the flythrough is the thing the tool exists to play.
+ * ================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ================================================================
+ * Narrow windows
+ *
+ * Not a mobile layout — placing waypoints in a 3D capture needs a pointer and
+ * a viewport. This only keeps the sidebar from eating the whole window on a
+ * half-screen laptop.
+ * ================================================================ */
+
+@media (max-width: 1100px) {
+  :root {
+    --w-sidebar: 300px;
+  }
+}

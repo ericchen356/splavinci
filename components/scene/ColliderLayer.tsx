@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
+import { theme } from '@/components/theme';
 
 export type ColliderLayerProps = {
   collider: ColliderData | null;
@@ -38,12 +39,12 @@ export type ColliderLayerProps = {
   onFloorPointerMove?: (point: Vec3, event: ThreeEvent<PointerEvent>) => void;
 };
 
-const DEFAULT_WIREFRAME_COLOR = '#6ea8fe';
-
 export function ColliderLayer({
   collider,
   showWireframe = false,
-  wireframeColor = DEFAULT_WIREFRAME_COLOR,
+  /* Defaults to the app accent, read from the token block: THREE.Color cannot
+     resolve a custom property, so the value is threaded in rather than named. */
+  wireframeColor = theme().marker,
   wireframeOpacity = 0.55,
   pickableFloor = false,
   onFloorPointerDown,

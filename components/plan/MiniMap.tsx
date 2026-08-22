@@ -25,7 +25,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, Vec3, Waypoint } from '@/lib/types';
 import { type WalkGrid } from '@/lib/path';
 import { CLICK_SLOP_PX } from '@/components/scene/pointer';
-import { buildPlanLayer, DEFAULT_PLAN_COLOURS, strokeSegments } from './blueprint';
+import { alpha, theme } from '@/components/theme';
+import { buildPlanLayer, planColours, strokeSegments } from './blueprint';
 
 export type WaypointAim = {
   id: string;
@@ -75,6 +76,21 @@ export type MiniMapProps = {
  *  fresh array - and a fresh dependency - on every render. */
 const NO_POINTS: readonly Vec3[] = [];
 const NO_AIMS: readonly WaypointAim[] = [];
+
+/* Canvas type. The map draws its own labels, so it cannot inherit the app font
+   stack and has to name it - kept here rather than in each fillText call so
+   the map cannot end up in three different faces. */
+const CANVAS_FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
+const LABEL_FONT_PX = 12;
+const MARKER_FONT_PX = 11;
+
+/* Marker geometry. The hit radii are deliberately larger than the drawn ones:
+   a 6px dot is a 12px target, which is half the 24px minimum, and these markers
+   are dragged as well as clicked. */
+const MARKER_R = 7;
+const MARKER_R_SELECTED = 9;
+const MARKER_HIT_R = 13;
+const COMMENT_HIT_R = 12;
 
 /** A press in progress, from pointerdown to pointerup. */
 type Gesture = {
@@ -189,7 +205,7 @@ export function MiniMap({
   const [dragging, setDragging] = useState(false);
 
   const plan = useMemo(
-    () => (grid ? buildPlanLayer(grid, DEFAULT_PLAN_COLOURS, cameraRadius) : null),
+    () => (grid ? buildPlanLayer(grid, planColours(), cameraRadius) : null),
     [grid, cameraRadius],
   );
 
@@ -211,13 +227,22 @@ export function MiniMap({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    ctx.fillStyle = '#0d0f12';
+    /* Every colour below comes from the token block in app/globals.css, read
+       through components/theme.ts. A canvas cannot resolve a custom property,
+       and the five hexes that used to be inlined here are exactly the ones that
+       got left behind whenever the panels around them were restyled. */
+    const t = theme();
+    const colours = planColours();
+
+    ctx.fillStyle = t.mapGround;
     ctx.fillRect(0, 0, width, height);
 
     if (!grid) {
-      ctx.fillStyle = '#98a2b0';
-      ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText('waiting for collider…', 12, height / 2);
+      ctx.fillStyle = t.muted;
+      ctx.font = `${LABEL_FONT_PX}px ${CANVAS_FONT}`;
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Waiting for the collider…', 12, height / 2);
+      ctx.textBaseline = 'alphabetic';
       return;
     }
 
@@ -241,14 +266,14 @@ export function MiniMap({
       // Outlines last, so the line work sits on top of the fills. This is what
       // makes the plan read as rooms and hallways rather than as a field of
       // coloured cells.
-      strokeSegments(ctx, plan.wallOutline, proj, DEFAULT_PLAN_COLOURS.wallOutline, 1);
-      strokeSegments(ctx, plan.openOutline, proj, DEFAULT_PLAN_COLOURS.outline, 1.25);
+      strokeSegments(ctx, plan.wallOutline, proj, colours.wallOutline, 1);
+      strokeSegments(ctx, plan.openOutline, proj, colours.outline, 1.25);
     }
 
     /* the generated route */
     if (polyline.length > 1) {
-      ctx.strokeStyle = '#6ea8fe';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = t.mapRoute;
+      ctx.lineWidth = 2.5;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.beginPath();
@@ -262,7 +287,7 @@ export function MiniMap({
 
     /* what the selected waypoint's shot will sweep, before anything is generated */
     if (shotPreview.length > 1) {
-      ctx.strokeStyle = '#ffb454';
+      ctx.strokeStyle = t.mapAim;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
@@ -289,9 +314,9 @@ export function MiniMap({
         ctx.moveTo(sx, sy);
         ctx.arc(sx, sy, reach, aim.from, aim.from + aim.sweep, aim.sweep < 0);
         ctx.closePath();
-        ctx.fillStyle = selected ? 'rgba(255,180,84,0.30)' : 'rgba(255,180,84,0.14)';
+        ctx.fillStyle = alpha(t.mapAim, selected ? 0.3 : 0.14);
         ctx.fill();
-        ctx.strokeStyle = selected ? 'rgba(255,180,84,0.9)' : 'rgba(255,180,84,0.4)';
+        ctx.strokeStyle = alpha(t.mapAim, selected ? 0.9 : 0.45);
         ctx.lineWidth = 1;
         ctx.stroke();
       } else {
@@ -299,7 +324,7 @@ export function MiniMap({
         ctx.beginPath();
         ctx.moveTo(sx, sy);
         ctx.lineTo(sx + Math.cos(aim.from) * reach, sy + Math.sin(aim.from) * reach);
-        ctx.strokeStyle = selected ? 'rgba(255,180,84,0.9)' : 'rgba(255,180,84,0.45)';
+        ctx.strokeStyle = alpha(t.mapAim, selected ? 0.9 : 0.5);
         ctx.lineWidth = selected ? 2 : 1.5;
         ctx.stroke();
       }
@@ -310,15 +335,15 @@ export function MiniMap({
       const { sx, sy } = proj.toScreen(w.position[0], w.position[2]);
       const selected = w.id === selectedId;
       ctx.beginPath();
-      ctx.arc(sx, sy, selected ? 8 : 6, 0, Math.PI * 2);
-      ctx.fillStyle = selected ? '#6ea8fe' : '#1d222a';
+      ctx.arc(sx, sy, selected ? MARKER_R_SELECTED : MARKER_R, 0, Math.PI * 2);
+      ctx.fillStyle = selected ? t.markerSelected : t.markerFill;
       ctx.fill();
-      ctx.strokeStyle = selected ? '#dce9ff' : '#6ea8fe';
+      ctx.strokeStyle = selected ? t.markerInk : t.marker;
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      ctx.fillStyle = selected ? '#0d0f12' : '#e8eaed';
-      ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+      ctx.fillStyle = selected ? t.markerInkInverse : t.markerInk;
+      ctx.font = `600 ${MARKER_FONT_PX}px ${CANVAS_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(i + 1), sx, sy + 0.5);
@@ -331,11 +356,16 @@ export function MiniMap({
       const { sx, sy } = proj.toScreen(c.position[0], c.position[2]);
       ctx.beginPath();
       ctx.moveTo(sx, sy);
-      ctx.lineTo(sx - 5, sy - 9);
-      ctx.lineTo(sx + 5, sy - 9);
+      ctx.lineTo(sx - 5, sy - 10);
+      ctx.lineTo(sx + 5, sy - 10);
       ctx.closePath();
-      ctx.fillStyle = '#ffb454';
+      ctx.fillStyle = t.mapAim;
       ctx.fill();
+      // A dark keyline, so a pin dropped on a light stretch of floor keeps its
+      // silhouette instead of dissolving into it.
+      ctx.strokeStyle = t.mapGround;
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     /* live camera: dot plus facing arrow */
@@ -347,7 +377,7 @@ export function MiniMap({
       const ax = (dx / len) * 16;
       const az = (dz / len) * 16;
 
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = t.mapCamera;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(sx, sy);
@@ -361,31 +391,20 @@ export function MiniMap({
       ctx.lineTo(sx + ax - 6 * Math.cos(angle - 0.4), sy + az - 6 * Math.sin(angle - 0.4));
       ctx.lineTo(sx + ax - 6 * Math.cos(angle + 0.4), sy + az - 6 * Math.sin(angle + 0.4));
       ctx.closePath();
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = t.mapCamera;
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = t.mapCamera;
       ctx.fill();
-      ctx.strokeStyle = '#0d0f12';
+      ctx.strokeStyle = t.mapGround;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
-
-    if (title) {
-      ctx.fillStyle = 'rgba(232,234,237,0.75)';
-      ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText(title, 8, 14);
-    }
-    if (hint) {
-      ctx.fillStyle = 'rgba(152,162,176,0.75)';
-      ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText(hint, 8, height - 8);
-    }
   }, [
     grid, plan, waypoints, selectedId, polyline, camera, comments, shotPreview,
-    height, title, hint,
+    height,
   ]);
 
   useEffect(() => {
@@ -415,10 +434,14 @@ export function MiniMap({
       const { sx, sy } = localPoint(canvas, event);
 
       // Pins and waypoints take precedence over dropping a new one.
-      const comment = hitTest(comments, (c) => proj.toScreen(c.position[0], c.position[2]), sx, sy, 9);
+      const comment = hitTest(
+        comments, (c) => proj.toScreen(c.position[0], c.position[2]), sx, sy, COMMENT_HIT_R,
+      );
       const waypoint = comment
         ? null
-        : hitTest(waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, 10);
+        : hitTest(
+            waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, MARKER_HIT_R,
+          );
 
       gestureRef.current = {
         pointerId: event.pointerId,
@@ -449,7 +472,9 @@ export function MiniMap({
         // Hovering: say that markers can be picked up before anyone tries.
         const over =
           onWaypointDrag != null &&
-          hitTest(waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, 10) != null;
+          hitTest(
+            waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, MARKER_HIT_R,
+          ) != null;
         setOverMarker(over);
         return;
       }
@@ -515,23 +540,40 @@ export function MiniMap({
         : 'default';
 
   return (
-    <div ref={wrapRef} style={{ width: '100%' }}>
-      <canvas
-        ref={canvasRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
-        onPointerLeave={() => setOverMarker(false)}
-        style={{
-          display: 'block',
-          borderRadius: 'var(--radius)',
-          border: '1px solid var(--line)',
-          cursor,
-          // A touch drag has to move the marker, not scroll the page.
-          touchAction: 'none',
-        }}
-      />
+    <div className="minimap">
+      {(title || hint) && (
+        <div className="minimap__head">
+          {title ? <span className="minimap__title">{title}</span> : <span />}
+          {hint ? <span>{hint}</span> : null}
+        </div>
+      )}
+      <div className="minimap__frame" ref={wrapRef}>
+        <canvas
+          ref={canvasRef}
+          className="minimap__canvas"
+          /* The map is a drawing of the room, so it is announced as one. Its
+             pointer gestures are a shortcut, not the only route: selecting a
+             waypoint and jumping to a comment are both buttons in the sidebar
+             lists. Dropping a NEW waypoint is map- or viewport-only, which is a
+             real gap and wants a control of its own rather than a label. */
+          role="img"
+          aria-label={describe(grid != null, waypoints.length, comments.length)}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+          onPointerLeave={() => setOverMarker(false)}
+          style={{ cursor }}
+        />
+      </div>
     </div>
   );
+}
+
+/** What the map currently shows, for anything that cannot look at it. */
+function describe(hasGrid: boolean, waypoints: number, comments: number): string {
+  if (!hasGrid) return 'Top-down map of the capture. Waiting for the collider to load.';
+  const parts = [`${waypoints} waypoint${waypoints === 1 ? '' : 's'}`];
+  if (comments > 0) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
+  return `Top-down map of the capture, showing ${parts.join(' and ')}.`;
 }

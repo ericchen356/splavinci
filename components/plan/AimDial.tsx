@@ -10,6 +10,12 @@
  *
  * Oriented to match the mini-map exactly - +x right, +z down, bearings
  * measured as atan2(dz, dx) - so an arc set here lands where the map shows it.
+ *
+ * The handles are draggable AND focusable. Dragging is the fast way to set an
+ * angle and keyboard is the only way for anyone not using a pointer, so each
+ * handle is a slider in its own right: arrow keys nudge by a degree, shift by
+ * ten, and the value is announced in degrees rather than as radians nobody
+ * asked about.
  */
 
 import { useCallback, useRef } from 'react';
@@ -27,6 +33,7 @@ export type AimDialProps = {
 };
 
 const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
 
 /** Shortest signed difference, so dragging past due-north does not unwind. */
 function angleDelta(a: number, b: number): number {
@@ -38,6 +45,11 @@ function angleDelta(a: number, b: number): number {
 
 function polar(cx: number, cy: number, r: number, angle: number) {
   return { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
+}
+
+/** Bearing in whole degrees, 0-359, for a readout or a label. */
+function degrees(radians: number): number {
+  return Math.round(((radians * 180) / Math.PI + 360) % 360);
 }
 
 export function AimDial({ aim, sweeps, explicit, onChange, onReset, size = 132 }: AimDialProps) {
@@ -83,6 +95,23 @@ export function AimDial({ aim, sweeps, explicit, onChange, onReset, size = 132 }
     if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
   };
 
+  /* Keyboard is the same two edits the pointer makes, in one-degree steps.
+     Home resets the handle it is on, which is the keyboard equivalent of the
+     Auto button beside the dial. */
+  const onHandleKey = (handle: 'from' | 'to') => (e: React.KeyboardEvent) => {
+    const step =
+      e.key === 'ArrowRight' || e.key === 'ArrowUp'
+        ? 1
+        : e.key === 'ArrowLeft' || e.key === 'ArrowDown'
+          ? -1
+          : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const delta = step * (e.shiftKey ? 10 : 1) * DEG;
+    if (handle === 'from') onChange({ from: aim.from + delta, sweep: aim.sweep });
+    else onChange({ from: aim.from, sweep: aim.sweep + delta });
+  };
+
   const from = aim.from;
   const to = aim.from + aim.sweep;
   const a = polar(cx, cy, radius, from);
@@ -94,64 +123,86 @@ export function AimDial({ aim, sweeps, explicit, onChange, onReset, size = 132 }
     : '';
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <svg
-          ref={ref}
-          width={size}
-          height={size}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          style={{ touchAction: 'none', flex: '0 0 auto' }}
-        >
-          <circle cx={cx} cy={cy} r={radius} fill="var(--panel-2)" stroke="var(--line)" />
-          {sweeps && <path d={wedge} fill="rgba(110,168,254,0.28)" stroke="none" />}
-          <line
-            x1={cx} y1={cy} x2={a.x} y2={a.y}
-            stroke="var(--accent)" strokeWidth={2}
-          />
-          {sweeps && (
-            <line x1={cx} y1={cy} x2={b.x} y2={b.y} stroke="var(--accent)" strokeWidth={2} />
-          )}
-          <circle cx={cx} cy={cy} r={3} fill="var(--text)" />
+    <div className="dial">
+      <svg
+        ref={ref}
+        className="dial__svg"
+        width={size}
+        height={size}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        aria-hidden="true"
+      >
+        <circle cx={cx} cy={cy} r={radius} fill="var(--surface-sunk)" stroke="var(--line-strong)" />
+        {sweeps && <path d={wedge} fill="var(--accent)" fillOpacity={0.28} stroke="none" />}
+        <line x1={cx} y1={cy} x2={a.x} y2={a.y} stroke="var(--accent)" strokeWidth={2} />
+        {sweeps && (
+          <line x1={cx} y1={cy} x2={b.x} y2={b.y} stroke="var(--accent)" strokeWidth={2} />
+        )}
+        <circle cx={cx} cy={cy} r={3} fill="var(--ink)" />
+        <circle
+          className="dial__handle"
+          cx={a.x}
+          cy={a.y}
+          r={8}
+          fill="var(--accent)"
+          stroke="var(--surface)"
+          strokeWidth={2}
+          tabIndex={0}
+          role="slider"
+          aria-label={sweeps ? 'Sweep start bearing' : 'Facing bearing'}
+          aria-valuemin={0}
+          aria-valuemax={359}
+          aria-valuenow={degrees(from)}
+          aria-valuetext={`${degrees(from)} degrees`}
+          onPointerDown={onPointerDown('from')}
+          onKeyDown={onHandleKey('from')}
+        />
+        {sweeps && (
           <circle
-            cx={a.x} cy={a.y} r={7}
-            fill="var(--accent)" stroke="var(--bg)" strokeWidth={2}
-            style={{ cursor: 'grab' }}
-            onPointerDown={onPointerDown('from')}
+            className="dial__handle"
+            cx={b.x}
+            cy={b.y}
+            r={8}
+            fill="var(--surface)"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            tabIndex={0}
+            role="slider"
+            aria-label="Sweep end bearing"
+            aria-valuemin={0}
+            aria-valuemax={359}
+            aria-valuenow={degrees(to)}
+            aria-valuetext={`${degrees(to)} degrees, a ${Math.round(
+              (aim.sweep * 180) / Math.PI,
+            )} degree arc`}
+            onPointerDown={onPointerDown('to')}
+            onKeyDown={onHandleKey('to')}
           />
-          {sweeps && (
-            <circle
-              cx={b.x} cy={b.y} r={7}
-              fill="var(--panel)" stroke="var(--accent)" strokeWidth={2}
-              style={{ cursor: 'grab' }}
-              onPointerDown={onPointerDown('to')}
-            />
-          )}
-        </svg>
+        )}
+      </svg>
 
-        <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.6 }}>
-          <div>
-            <span style={{ color: 'var(--text)' }}>{Math.round(((from * 180) / Math.PI + 360) % 360)}°</span>
-            {sweeps && (
-              <>
-                {' → '}
-                <span style={{ color: 'var(--text)' }}>
-                  {Math.round(((to * 180) / Math.PI + 360) % 360)}°
-                </span>
-              </>
-            )}
-          </div>
-          {sweeps && <div>{Math.round((aim.sweep * 180) / Math.PI)}° arc</div>}
-          <button
-            onClick={onReset}
-            disabled={!explicit}
-            style={{ padding: '2px 8px', fontSize: 11, marginTop: 4 }}
-          >
-            Auto
-          </button>
+      <div className="dial__readout">
+        <div className="num">
+          <span className="strong-ink">{degrees(from)}°</span>
+          {sweeps && (
+            <>
+              {' → '}
+              <span className="strong-ink">{degrees(to)}°</span>
+            </>
+          )}
         </div>
+        {sweeps && <div className="num">{Math.round((aim.sweep * 180) / Math.PI)}° arc</div>}
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={onReset}
+          disabled={!explicit}
+          title="Go back to the bearing the generator infers from the room."
+        >
+          Auto
+        </button>
       </div>
     </div>
   );

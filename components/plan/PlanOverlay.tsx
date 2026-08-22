@@ -14,6 +14,7 @@ import { Line } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3, Waypoint } from '@/lib/types';
 import { isDrag } from '@/components/scene/pointer';
+import { theme } from '@/components/theme';
 
 export type PlanOverlayProps = {
   waypoints: readonly Waypoint[];
@@ -27,9 +28,11 @@ export type PlanOverlayProps = {
   cameraHeight?: number;
 };
 
-const ACCENT = '#6ea8fe';
-const SELECTED = '#dce9ff';
-const PREVIEW = '#ffb454';
+/* Colours come from the token block, not from three constants here. These
+   materials sit over a photoreal capture that the chrome around them is tuned
+   against, so a marker blue that drifts from the panel blue is immediately
+   visible - and THREE.Color cannot read a custom property, so the value has to
+   be threaded in from components/theme.ts rather than referenced. */
 
 /** Shared default: a fresh literal would rebuild the preview memo every render. */
 const NO_POINTS: readonly Vec3[] = [];
@@ -42,6 +45,8 @@ export function PlanOverlay({
   onSelect,
   cameraHeight = 1.55,
 }: PlanOverlayProps) {
+  const t = theme();
+
   // Lift the route just clear of the floor; drawn coplanar it z-fights.
   const routePoints = useMemo<THREE.Vector3[]>(
     () => polyline.map((p) => new THREE.Vector3(p[0], p[1] + 0.03, p[2])),
@@ -57,11 +62,18 @@ export function PlanOverlay({
   return (
     <group name="plan-overlay">
       {routePoints.length > 1 && (
-        <Line points={routePoints} color={ACCENT} lineWidth={3} dashed={false} />
+        <Line points={routePoints} color={t.mapRoute} lineWidth={3} dashed={false} />
       )}
 
       {previewPoints.length > 1 && (
-        <Line points={previewPoints} color={PREVIEW} lineWidth={2} dashed dashSize={0.14} gapSize={0.1} />
+        <Line
+          points={previewPoints}
+          color={t.mapAim}
+          lineWidth={2}
+          dashed
+          dashSize={0.14}
+          gapSize={0.1}
+        />
       )}
 
       {waypoints.map((w, i) => (
@@ -96,7 +108,8 @@ function WaypointMarker({
   cameraHeight: number;
   onSelect?: (id: string) => void;
 }) {
-  const colour = selected ? SELECTED : ACCENT;
+  const t = theme();
+  const colour = selected ? t.markerSelected : t.marker;
   const badge = useOrderTexture(order, selected);
   const pick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -149,6 +162,7 @@ function useOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | nu
 
 function makeOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | null {
   if (typeof document === 'undefined') return null;
+  const t = theme();
 
   const size = 64;
   const canvas = document.createElement('canvas');
@@ -159,14 +173,14 @@ function makeOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | n
 
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
-  ctx.fillStyle = selected ? '#dce9ff' : '#16191f';
+  ctx.fillStyle = selected ? t.markerSelected : t.markerFill;
   ctx.fill();
   ctx.lineWidth = 3;
-  ctx.strokeStyle = ACCENT;
+  ctx.strokeStyle = t.marker;
   ctx.stroke();
 
-  ctx.fillStyle = selected ? '#0d0f12' : '#e8eaed';
-  ctx.font = 'bold 32px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = selected ? t.markerInkInverse : t.markerInk;
+  ctx.font = "bold 32px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(String(n), size / 2, size / 2 + 1);

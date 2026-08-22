@@ -25,6 +25,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '@/lib/types';
 import type { SplatTransform } from '@/lib/scene/splat';
 import { useRoomAssets } from '@/lib/scene/useRoomAssets';
+import { theme } from '@/components/theme';
 import { SplatLayer } from './SplatLayer';
 import { ColliderLayer } from './ColliderLayer';
 
@@ -66,6 +67,7 @@ export function RoomScene({
   children,
 }: RoomSceneProps) {
   const assets = useRoomAssets();
+  const t = theme();
 
   // Default the splat placement from the active capture. A Y-down capture
   // rendered with the identity transform comes out upside down, and every
@@ -81,7 +83,7 @@ export function RoomScene({
       {/* A dim ambient + hemisphere pair so mounted overlays read against the
           splat cloud without fighting it. Cheap, and no shadow maps. */}
       <ambientLight intensity={0.85} />
-      <hemisphereLight args={['#dfe7f5', '#2a2620', 0.6]} />
+      <hemisphereLight args={[t.sceneSky, t.sceneBounce, 0.6]} />
       <directionalLight position={[6, 9, 4]} intensity={0.55} />
 
       {showSplat ? <SplatLayer transform={placement} opacity={splatOpacity} /> : null}
