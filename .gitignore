@@ -4,7 +4,9 @@ out
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
-.env*.local
+.env
+.env.*
+!.env.example
 
 # large splat captures - keep out of git
 *.spz

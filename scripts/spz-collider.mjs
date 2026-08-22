@@ -1,150 +1,147 @@
 /**
- * Derive a walkable collider (and an object manifest) from a Gaussian splat.
+ * Derive a walkable collider from a Gaussian splat.
  *
  *   node scripts/spz-collider.mjs <in.spz> <outDir> [cellSize]
  *
- * A real capture arrives as splats and nothing else - no collision mesh, no
- * object list - but the waypoint, routing and auto-shot pipeline needs both. Rather than
- * hand-authoring them, this reads the geometry the splats already describe:
+ * A splat file contains no mesh and no collision data - only Gaussians. But
+ * the Gaussians describe a density field, and a wall is exactly a dense,
+ * opaque, continuous mass within it. So occupancy is reconstructed from
+ * density rather than guessed from splat counts.
  *
- *   terrain    the low percentile of height per cell, which is the ground
- *   obstacles  cells carrying mass in the camera's vertical band, which is
- *              what the camera would actually collide with
- *   objects    connected clusters of obstacle cells, sized from their extent,
- *              so shot inference has real proportions to reason about
+ * WHY DENSITY AND NOT COUNTS. Counting splat centres per cell treats a haze of
+ * tiny transparent floaters the same as a solid wall, because it throws away
+ * the two fields that distinguish them: opacity and scale. The result is a map
+ * that looks like noise - speckle everywhere, no readable rooms. Here each
+ * splat contributes its opacity across the floor area its Gaussian actually
+ * covers, which is what makes walls come out solid and haze come out empty.
+ *
+ * The free-space/solid split is then found with Otsu's method rather than a
+ * tuned constant, because that split is genuinely bimodal and a constant only
+ * ever fits the capture it was tuned on.
  *
  * ORIENTATION. 3DGS captures trained from COLMAP are Y-down. This writes the
- * collider in the same Y-up frame the app renders the splat in - a 180 degree
- * turn about X, then a lift so the ground sits at y = 0 - and reports that
- * transform in scene.json so SplatLayer can apply exactly the same one. If the
- * two ever disagree the splat and the collider silently separate.
+ * collider in the same Y-up frame the app renders the splat in and reports the
+ * transform in scene.json, so SplatLayer can apply exactly the same one. If the
+ * two disagree the splat and the collider silently separate.
  */
-import { createReadStream, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createGunzip } from 'node:zlib';
-import { pipeline } from 'node:stream/promises';
-import { createWriteStream, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { box, mergeParts } from './lib/geometry.mjs';
 import { writeGlb } from './lib/glb.mjs';
+import { readSpz, otsuThreshold } from './lib/spz-read.mjs';
 
 const [, , inPath, outDir = 'public/derived', cellArg] = process.argv;
 if (!inPath) {
   console.error('usage: spz-collider.mjs <in.spz> <outDir> [cellSize]');
   process.exit(1);
 }
-const CELL = Number(cellArg) || 0.5;
 
-/* ------------------------------- decode ---------------------------------- */
+const CELL = Number(cellArg) || 0.4;
+const HEIGHT_BIN = Number(process.env.HEIGHT_BIN ?? 0.25);
+// Below this a Gaussian is haze, not surface. Floaters in a capture are almost
+// always faint; real geometry is not.
+const MIN_OPACITY = Number(process.env.MIN_OPACITY ?? 0.12);
+const BAND_LOW = Number(process.env.BAND_LOW ?? 0.5);
+const BAND_HIGH = Number(process.env.BAND_HIGH ?? 2.2);
+// Fraction of a column's peak density that counts as "a surface starts here".
+const FLOOR_PEAK_FRACTION = Number(process.env.FLOOR_PEAK_FRACTION ?? 0.18);
 
-const tmp = join(tmpdir(), `spzc-${process.pid}.bin`);
-await pipeline(createReadStream(inPath), createGunzip(), createWriteStream(tmp));
-const raw = readFileSync(tmp);
-if (raw.readUInt32LE(0) !== 0x5053474e) throw new Error('not an SPZ file');
-const N = raw.readUInt32LE(8);
-const fracBits = raw.readUInt8(13);
-const scale = 1 / (1 << fracBits);
-console.log(`${N.toLocaleString()} splats, cell ${CELL} m`);
+const spz = await readSpz(inPath, { flipYDown: true });
+const { n, X, Y, Z, A, S } = spz;
+console.log(`${n.toLocaleString()} splats, cell ${CELL} m, height bin ${HEIGHT_BIN} m`);
 
-// Y-down -> Y-up is a 180 degree turn about X: (x, y, z) -> (x, -y, -z).
-const X = new Float32Array(N);
-const Y = new Float32Array(N);
-const Z = new Float32Array(N);
-for (let i = 0; i < N; i++) {
-  const o = 16 + i * 9;
-  const rd = (b) => {
-    let v = raw[b] | (raw[b + 1] << 8) | (raw[b + 2] << 16);
-    if (v & 0x800000) v -= 0x1000000;
-    return v * scale;
-  };
-  X[i] = rd(o);
-  Y[i] = -rd(o + 3);
-  Z[i] = -rd(o + 6);
+/* ---------------------------- robust bounds ------------------------------- */
+
+function percentile(arr, p, stride = 1) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += stride) if (A[i] >= MIN_OPACITY) out.push(arr[i]);
+  if (out.length === 0) return 0;
+  out.sort((a, b) => a - b);
+  return out[Math.min(out.length - 1, Math.max(0, Math.floor(p * out.length)))];
 }
-unlinkSync(tmp);
-
-/* --------------------------- robust bounds -------------------------------- */
-
-// Percentile bounds, not min/max: a handful of floater splats sit tens of
-// metres off and would otherwise stretch the grid over mostly empty space.
-function percentile(arr, p) {
-  const copy = Float32Array.from(arr);
-  copy.sort();
-  return copy[Math.min(copy.length - 1, Math.max(0, Math.floor(p * copy.length)))];
-}
-const sample = (a) => {
-  const step = Math.max(1, Math.floor(a.length / 200000));
-  const out = new Float32Array(Math.ceil(a.length / step));
-  for (let i = 0, k = 0; i < a.length; i += step) out[k++] = a[i];
-  return out;
-};
-const sx = sample(X), sy = sample(Y), sz = sample(Z);
-const minX = percentile(sx, 0.001), maxX = percentile(sx, 0.999);
-const minZ = percentile(sz, 0.001), maxZ = percentile(sz, 0.999);
-console.log(`extent x ${(maxX - minX).toFixed(1)} m, z ${(maxZ - minZ).toFixed(1)} m`);
+const stride = Math.max(1, Math.floor(n / 400000));
+const minX = percentile(X, 0.002, stride), maxX = percentile(X, 0.998, stride);
+const minZ = percentile(Z, 0.002, stride), maxZ = percentile(Z, 0.998, stride);
+const minY = percentile(Y, 0.002, stride), maxY = percentile(Y, 0.998, stride);
+console.log(`extent ${(maxX - minX).toFixed(1)} x ${(maxY - minY).toFixed(1)} x ${(maxZ - minZ).toFixed(1)} m`);
 
 const cols = Math.max(1, Math.ceil((maxX - minX) / CELL));
 const rows = Math.max(1, Math.ceil((maxZ - minZ) / CELL));
+const bins = Math.max(1, Math.ceil((maxY - minY) / HEIGHT_BIN));
 const cellCount = cols * rows;
-console.log(`grid ${cols} x ${rows} = ${cellCount.toLocaleString()} cells`);
+console.log(`grid ${cols} x ${rows} x ${bins} bins = ${(cellCount * bins).toLocaleString()} voxels`);
 
-/* ----------------------- bucket heights per cell -------------------------- */
+/* --------------------- opacity-weighted density field --------------------- */
 
-const cellOf = (i) => {
-  const c = Math.floor((X[i] - minX) / CELL);
-  const r = Math.floor((Z[i] - minZ) / CELL);
-  if (c < 0 || c >= cols || r < 0 || r >= rows) return -1;
-  return r * cols + c;
-};
+// density[cell * bins + bin] - accumulated opacity of every Gaussian whose
+// horizontal footprint covers that cell at that height.
+const density = new Float32Array(cellCount * bins);
+let skippedFaint = 0;
+let skippedOutside = 0;
 
-const counts = new Int32Array(cellCount);
-for (let i = 0; i < N; i++) { const c = cellOf(i); if (c >= 0) counts[c]++; }
+for (let i = 0; i < n; i++) {
+  const a = A[i];
+  if (a < MIN_OPACITY) { skippedFaint++; continue; }
 
-const offsets = new Int32Array(cellCount + 1);
-for (let c = 0; c < cellCount; c++) offsets[c + 1] = offsets[c] + counts[c];
-const heights = new Float32Array(offsets[cellCount]);
-const cursor = Int32Array.from(offsets.subarray(0, cellCount));
-for (let i = 0; i < N; i++) { const c = cellOf(i); if (c >= 0) heights[cursor[c]++] = Y[i]; }
+  const y = Y[i];
+  let bin = Math.floor((y - minY) / HEIGHT_BIN);
+  if (bin < 0 || bin >= bins) { skippedOutside++; continue; }
 
-/* --------------------------- terrain + occupancy -------------------------- */
+  // Footprint: one sigma of horizontal extent, floored at half a cell so a
+  // sub-cell Gaussian still marks the cell it sits in.
+  const radius = Math.max(S[i], CELL * 0.5);
+  const c0 = Math.max(0, Math.floor((X[i] - radius - minX) / CELL));
+  const c1 = Math.min(cols - 1, Math.floor((X[i] + radius - minX) / CELL));
+  const r0 = Math.max(0, Math.floor((Z[i] - radius - minZ) / CELL));
+  const r1 = Math.min(rows - 1, Math.floor((Z[i] + radius - minZ) / CELL));
 
-// Tunable from the environment: an outdoor capture and an indoor room want
-// very different thresholds, and the right values are found by looking at the
-// ASCII map (npx tsx scripts/path-lab.ts <collider.glb>) rather than derived.
-const MIN_FLOOR_SPLATS = Number(process.env.MIN_FLOOR_SPLATS ?? 3);
-const BAND_LOW = Number(process.env.BAND_LOW ?? 0.5);    // below this is ground clutter
-const BAND_HIGH = Number(process.env.BAND_HIGH ?? 2.2);  // camera corridor top
-const OBSTACLE_FRACTION = Number(process.env.OBSTACLE_FRACTION ?? 0.28);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      density[(r * cols + c) * bins + bin] += a;
+    }
+  }
+}
+console.log(`skipped ${skippedFaint.toLocaleString()} faint (< ${MIN_OPACITY} opacity), ` +
+            `${skippedOutside.toLocaleString()} outside height range`);
+
+/* ------------------- floor height and band density per cell ---------------- */
 
 const terrain = new Float32Array(cellCount).fill(NaN);
-const bandCount = new Int32Array(cellCount);
+const bandDensity = new Float32Array(cellCount);
 
 for (let c = 0; c < cellCount; c++) {
-  const start = offsets[c], end = offsets[c + 1];
-  const n = end - start;
-  if (n < MIN_FLOOR_SPLATS) continue;
-  const slice = heights.subarray(start, end);
-  const sorted = Float32Array.from(slice).sort();
-  // 8th percentile, not the minimum: the lowest splat in a cell is as likely
-  // to be a reconstruction artefact below ground as it is to be ground.
-  terrain[c] = sorted[Math.floor(0.08 * n)];
-  const lo = terrain[c] + BAND_LOW;
-  const hi = terrain[c] + BAND_HIGH;
+  const base = c * bins;
+  let peak = 0;
+  let column = 0;
+  for (let b = 0; b < bins; b++) {
+    const d = density[base + b];
+    column += d;
+    if (d > peak) peak = d;
+  }
+  if (column <= 0 || peak <= 0) continue;
+
+  // Ground is the first substantial return scanning upward - not the minimum,
+  // which is as likely to be a reconstruction artefact below the floor.
+  const trigger = peak * FLOOR_PEAK_FRACTION;
+  let floorBin = -1;
+  for (let b = 0; b < bins; b++) {
+    if (density[base + b] >= trigger) { floorBin = b; break; }
+  }
+  if (floorBin < 0) continue;
+
+  terrain[c] = minY + (floorBin + 0.5) * HEIGHT_BIN;
+
+  const loBin = Math.min(bins - 1, floorBin + Math.round(BAND_LOW / HEIGHT_BIN));
+  const hiBin = Math.min(bins - 1, floorBin + Math.round(BAND_HIGH / HEIGHT_BIN));
   let inBand = 0;
-  for (let k = 0; k < n; k++) if (sorted[k] >= lo && sorted[k] <= hi) inBand++;
-  bandCount[c] = inBand;
+  for (let b = loBin; b <= hiBin; b++) inBand += density[base + b];
+  bandDensity[c] = inBand;
 }
 
-// Reject terrain outliers before anything downstream trusts them.
-//
-// A cell with only a handful of splats can have its height percentile land on
-// a floater metres above the ground, and one bad cell becomes a spike of
-// "floor" that distorts camera framing and gives A* a staircase to nowhere.
-// Comparing each cell against the median of its neighbours catches those
-// without flattening genuine terrain, which varies smoothly between adjacent
-// cells by construction.
+/* ------------------------- terrain outlier rejection ---------------------- */
+
 {
-  const MAX_NEIGHBOUR_DEVIATION = Number(process.env.MAX_TERRAIN_DEVIATION ?? 2.5);
+  const MAX_DEVIATION = Number(process.env.MAX_TERRAIN_DEVIATION ?? 2.5);
   for (let pass = 0; pass < 2; pass++) {
     const rejected = [];
     for (let c = 0; c < cellCount; c++) {
@@ -162,34 +159,40 @@ for (let c = 0; c < cellCount; c++) {
       }
       if (around.length < 3) { rejected.push(c); continue; }
       around.sort((a, b) => a - b);
-      const median = around[Math.floor(around.length / 2)];
-      if (Math.abs(terrain[c] - median) > MAX_NEIGHBOUR_DEVIATION) rejected.push(c);
+      if (Math.abs(terrain[c] - around[Math.floor(around.length / 2)]) > MAX_DEVIATION) {
+        rejected.push(c);
+      }
     }
     for (const c of rejected) terrain[c] = NaN;
-    console.log(`terrain outlier pass ${pass + 1}: rejected ${rejected.length} cells`);
     if (rejected.length === 0) break;
+    console.log(`terrain outlier pass ${pass + 1}: rejected ${rejected.length} cells`);
   }
 }
 
-// Lift so the median ground sits at y = 0.
-const validTerrain = [];
-for (let c = 0; c < cellCount; c++) if (!Number.isNaN(terrain[c])) validTerrain.push(terrain[c]);
-validTerrain.sort((a, b) => a - b);
-const groundOffset = -validTerrain[Math.floor(validTerrain.length / 2)];
-console.log(`ground offset ${groundOffset.toFixed(3)} m (median terrain -> 0)`);
+/* ----------------------- automatic occupancy threshold -------------------- */
+
+const occupiedSamples = [];
+for (let c = 0; c < cellCount; c++) {
+  if (!Number.isNaN(terrain[c])) occupiedSamples.push(bandDensity[c]);
+}
+const wallThreshold = otsuThreshold(occupiedSamples);
+console.log(`Otsu wall threshold ${wallThreshold.toFixed(2)} ` +
+            `(band density over ${occupiedSamples.length.toLocaleString()} floor cells)`);
 
 const blocked = new Uint8Array(cellCount);
-let floorCells = 0, blockedCells = 0;
 for (let c = 0; c < cellCount; c++) {
   if (Number.isNaN(terrain[c])) continue;
-  floorCells++;
-  const n = offsets[c + 1] - offsets[c];
-  if (bandCount[c] >= Math.max(4, n * OBSTACLE_FRACTION)) { blocked[c] = 1; blockedCells++; }
+  if (bandDensity[c] >= wallThreshold) blocked[c] = 1;
 }
-console.log(`floor cells ${floorCells.toLocaleString()}, blocked ${blockedCells.toLocaleString()} ` +
-            `(${(100 * blockedCells / Math.max(1, floorCells)).toFixed(1)}%)`);
 
-
+// Lift so the median ground sits at y = 0.
+const groundSamples = [];
+for (let c = 0; c < cellCount; c++) if (!Number.isNaN(terrain[c])) groundSamples.push(terrain[c]);
+groundSamples.sort((a, b) => a - b);
+const groundOffset = groundSamples.length
+  ? -groundSamples[Math.floor(groundSamples.length / 2)]
+  : 0;
+console.log(`ground offset ${groundOffset.toFixed(3)} m (median terrain -> 0)`);
 /* --------------------------- grid morphology ------------------------------ */
 /**
  * Per-cell thresholding decides each cell in isolation, so it produces speckle:
@@ -278,51 +281,42 @@ function keepLargeComponents(mask, cols, rows, minFraction = 0.04) {
 
 /* ------------------------ clean up the raw masks -------------------------- */
 {
-  const before = { floor: 0, blocked: 0 };
+  let beforeFloor = 0, beforeBlocked = 0;
   for (let c = 0; c < cellCount; c++) {
-    if (!Number.isNaN(terrain[c])) before.floor++;
-    if (blocked[c]) before.blocked++;
+    if (!Number.isNaN(terrain[c])) beforeFloor++;
+    if (blocked[c]) beforeBlocked++;
   }
 
-  // Floor coverage: close pinholes, then discard fringe islands. A cell that
-  // just missed the splat threshold but is surrounded by floor is floor.
   let dataMask = new Uint8Array(cellCount);
   for (let c = 0; c < cellCount; c++) dataMask[c] = Number.isNaN(terrain[c]) ? 0 : 1;
   dataMask = close(dataMask, cols, rows, 1);
   const { mask: kept, components } = keepLargeComponents(dataMask, cols, rows, 0.04);
   dataMask = kept;
 
-  // Cells the close() added have no height yet. Grow heights into them from
-  // their neighbours rather than inventing a value: terrain is continuous, so
-  // an average of what is already known is the honest estimate.
   for (let pass = 0; pass < 4; pass++) {
     let filled = 0;
     for (let c = 0; c < cellCount; c++) {
       if (!dataMask[c] || !Number.isNaN(terrain[c])) continue;
       const cx = c % cols, cz = Math.floor(c / cols);
-      let sum = 0, n = 0;
+      let sum = 0, cnt = 0;
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           const nx = cx + dx, nz = cz + dz;
           if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
           const t = terrain[nz * cols + nx];
-          if (!Number.isNaN(t)) { sum += t; n++; }
+          if (!Number.isNaN(t)) { sum += t; cnt++; }
         }
       }
-      if (n > 0) { terrain[c] = sum / n; filled++; }
+      if (cnt > 0) { terrain[c] = sum / cnt; filled++; }
     }
     if (filled === 0) break;
   }
-  // Anything outside the kept mask is not floor.
   for (let c = 0; c < cellCount; c++) if (!dataMask[c]) terrain[c] = NaN;
 
-  // Obstacles: drop lone cells, then close the gaps inside walls so a wall
-  // reads as a continuous run rather than a dotted line.
   let obstacleMask = Uint8Array.from(blocked);
   obstacleMask = open(obstacleMask, cols, rows, 1);
   obstacleMask = close(obstacleMask, cols, rows, 1);
   for (let c = 0; c < cellCount; c++) {
-    // An obstacle only counts where there is floor to stand on beside it.
     blocked[c] = obstacleMask[c] && !Number.isNaN(terrain[c]) ? 1 : 0;
   }
 
@@ -331,36 +325,31 @@ function keepLargeComponents(mask, cols, rows, minFraction = 0.04) {
     if (!Number.isNaN(terrain[c])) afterFloor++;
     if (blocked[c]) afterBlocked++;
   }
-  console.log(`cleanup: floor ${before.floor} -> ${afterFloor}, ` +
-              `blocked ${before.blocked} -> ${afterBlocked}, ` +
-              `${components} components before pruning`);
+  console.log(`cleanup: floor ${beforeFloor} -> ${afterFloor}, ` +
+              `blocked ${beforeBlocked} -> ${afterBlocked}, ${components} components before pruning`);
 }
 
 /* ------------------------------- emit glb --------------------------------- */
 
 mkdirSync(outDir, { recursive: true });
-mkdirSync(join(outDir, 'meshes'), { recursive: true });
 
 const worldX = (c) => minX + (c % cols) * CELL;
 const worldZ = (c) => minZ + Math.floor(c / cols) * CELL;
 const worldY = (c) => terrain[c] + groundOffset;
 
-// Floor: one thin slab per cell. Independent quads rather than a stitched
-// heightfield, so holes in the capture stay holes instead of being bridged.
 const floorParts = [];
-for (let c = 0; c < cellCount; c++) {
-  if (Number.isNaN(terrain[c]) || blocked[c]) continue;
-  const y = worldY(c);
-  floorParts.push(box([worldX(c), y - 0.05, worldZ(c)], [worldX(c) + CELL, y, worldZ(c) + CELL]));
-}
 const obstacleParts = [];
 for (let c = 0; c < cellCount; c++) {
-  if (!blocked[c]) continue;
+  if (Number.isNaN(terrain[c])) continue;
   const y = worldY(c);
-  obstacleParts.push(box(
-    [worldX(c), y + BAND_LOW, worldZ(c)],
-    [worldX(c) + CELL, y + BAND_HIGH, worldZ(c) + CELL],
-  ));
+  if (blocked[c]) {
+    obstacleParts.push(box(
+      [worldX(c), y + BAND_LOW, worldZ(c)],
+      [worldX(c) + CELL, y + BAND_HIGH, worldZ(c) + CELL],
+    ));
+  } else {
+    floorParts.push(box([worldX(c), y - 0.05, worldZ(c)], [worldX(c) + CELL, y, worldZ(c) + CELL]));
+  }
 }
 
 const parts = [];
@@ -370,95 +359,20 @@ const bytes = writeGlb(join(outDir, 'collider.glb'), parts, [0.6, 0.65, 0.75, 1]
 console.log(`collider.glb: floor ${floorParts.length} cells, obstacles ${obstacleParts.length} cells, ` +
             `${(bytes / 1e6).toFixed(1)} MB`);
 
-/* --------------------- cluster obstacles into objects --------------------- */
-
-// Connected components over blocked cells. Gives the auto shot inference real
-// proportions to work with instead of an empty manifest, which would make
-// every waypoint a dolly-through.
-const label = new Int32Array(cellCount).fill(-1);
-const clusters = [];
-const stack = [];
-for (let seed = 0; seed < cellCount; seed++) {
-  if (!blocked[seed] || label[seed] !== -1) continue;
-  const id = clusters.length;
-  const cells = [];
-  stack.push(seed);
-  label[seed] = id;
-  while (stack.length) {
-    const c = stack.pop();
-    cells.push(c);
-    const cx = c % cols, cz = Math.floor(c / cols);
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = cx + dx, nz = cz + dz;
-      if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
-      const nc = nz * cols + nx;
-      if (blocked[nc] && label[nc] === -1) { label[nc] = id; stack.push(nc); }
-    }
-  }
-  clusters.push(cells);
-}
-
-const MAX_OBJECTS = 14;
-const ranked = clusters
-  .map((cells) => {
-    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = -Infinity, base = Infinity;
-    for (const c of cells) {
-      x0 = Math.min(x0, worldX(c)); x1 = Math.max(x1, worldX(c) + CELL);
-      z0 = Math.min(z0, worldZ(c)); z1 = Math.max(z1, worldZ(c) + CELL);
-      const y = worldY(c);
-      base = Math.min(base, y);
-      const slice = heights.subarray(offsets[c], offsets[c + 1]);
-      let hi = -Infinity;
-      for (let k = 0; k < slice.length; k++) if (slice[k] > hi) hi = slice[k];
-      top = Math.max(top, hi + groundOffset);
-    }
-    return { cells: cells.length, x0, x1, z0, z1, base, top };
-  })
-  // Ignore slivers: one or two cells is noise, not a feature. The right floor
-  // depends on cell size, so it is tunable alongside the other thresholds.
-  .filter((c) => c.cells >= Number(process.env.MIN_CLUSTER_CELLS ?? 3))
-  // Drop clusters that span a large share of the scene. Obstacle cells in an
-  // outdoor capture connect into one sprawling mass - terrain and structure
-  // fused together - and that blob is not an object anyone frames a shot on.
-  .filter((c) => {
-    const sceneSpan = Math.max(maxX - minX, maxZ - minZ);
-    return Math.max(c.x1 - c.x0, c.z1 - c.z0) <= sceneSpan * 0.35;
-  })
-  .sort((a, b) => b.cells - a.cells)
-  .slice(0, MAX_OBJECTS);
-
-const manifest = ranked.map((c, i) => {
-  const id = `feature-${i + 1}`;
-  const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2;
-  const height = Math.max(0.6, Math.min(c.top - c.base, 12));
-  const cy = c.base + height / 2;
-  const half = [(c.x1 - c.x0) / 2, height / 2, (c.z1 - c.z0) / 2];
-  writeGlb(
-    join(outDir, 'meshes', `${id}.glb`),
-    [{ name: id, ...box([-half[0], -half[1], -half[2]], half) }],
-    [0.42, 0.46, 0.4, 1],
-  );
-  return {
-    id,
-    meshUrl: `/${outDir.replace(/^public\//, '')}/meshes/${id}.glb`,
-    position: [+cx.toFixed(3), +cy.toFixed(3), +cz.toFixed(3)],
-    label: `Feature ${i + 1} (${(c.x1 - c.x0).toFixed(1)}x${height.toFixed(1)}x${(c.z1 - c.z0).toFixed(1)} m)`,
-  };
-});
-writeFileSync(join(outDir, 'objects.json'), JSON.stringify(manifest, null, 2) + '\n');
-console.log(`objects.json: ${manifest.length} features from ${clusters.length} clusters`);
-
-/* ------------------------------ scene.json -------------------------------- */
+// No individually meshed objects exist in this version of the pipeline; the
+// file is still written so anything still fetching it gets an empty list
+// rather than a 404.
+writeFileSync(join(outDir, 'objects.json'), '[]\n');
 
 writeFileSync(join(outDir, 'scene.json'), JSON.stringify({
   source: inPath,
   splatTransform: {
-    // Must match how the collider above was generated.
     rotation: [Math.PI, 0, 0],
     position: [0, +groundOffset.toFixed(4), 0],
     scale: 1,
   },
   cellSize: CELL,
+  wallThreshold: +wallThreshold.toFixed(4),
   bounds: {
     min: [+minX.toFixed(3), 0, +minZ.toFixed(3)],
     max: [+maxX.toFixed(3), 0, +maxZ.toFixed(3)],

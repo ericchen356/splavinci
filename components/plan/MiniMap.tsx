@@ -15,9 +15,8 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Comment, Vec3, Waypoint } from '@/lib/types';
-import { cellIndex, type WalkGrid } from '@/lib/path';
-
-export type MiniMapObject = { id: string; position: Vec3; label?: string };
+import { type WalkGrid } from '@/lib/path';
+import { buildPlanLayer, DEFAULT_PLAN_COLOURS, strokeSegments } from './blueprint';
 
 export type MiniMapProps = {
   grid: WalkGrid | null;
@@ -28,7 +27,6 @@ export type MiniMapProps = {
   /** Live camera pose - draws a dot with a facing arrow. */
   camera?: { position: Vec3; lookAt: Vec3 } | null;
   comments?: readonly Comment[];
-  objects?: readonly MiniMapObject[];
   /** Click on empty floor. Receives world x/z. */
   onPick?: (x: number, z: number) => void;
   onWaypointPick?: (id: string) => void;
@@ -47,10 +45,14 @@ type Projection = {
   offsetY: number;
 };
 
-function projectionFor(grid: WalkGrid, width: number, height: number): Projection {
+function projectionFor(
+  box: { minX: number; minZ: number; maxX: number; maxZ: number },
+  width: number,
+  height: number,
+): Projection {
   const pad = 8;
-  const w = grid.bounds.max.x - grid.bounds.min.x;
-  const h = grid.bounds.max.z - grid.bounds.min.z;
+  const w = box.maxX - box.minX;
+  const h = box.maxZ - box.minZ;
   const scale = Math.min((width - pad * 2) / w, (height - pad * 2) / h);
   const offsetX = (width - w * scale) / 2;
   const offsetY = (height - h * scale) / 2;
@@ -58,44 +60,17 @@ function projectionFor(grid: WalkGrid, width: number, height: number): Projectio
     scale, offsetX, offsetY,
     toScreen(x, z) {
       return {
-        sx: offsetX + (x - grid.bounds.min.x) * scale,
-        sy: offsetY + (z - grid.bounds.min.z) * scale,
+        sx: offsetX + (x - box.minX) * scale,
+        sy: offsetY + (z - box.minZ) * scale,
       };
     },
     toWorld(sx, sy) {
       return {
-        x: grid.bounds.min.x + (sx - offsetX) / scale,
-        z: grid.bounds.min.z + (sy - offsetY) / scale,
+        x: box.minX + (sx - offsetX) / scale,
+        z: box.minZ + (sy - offsetY) / scale,
       };
     },
   };
-}
-
-/** Rasterise the grid once into an offscreen canvas; redraws just blit it. */
-function gridImage(grid: WalkGrid): HTMLCanvasElement | null {
-  if (typeof document === 'undefined') return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = grid.cols;
-  canvas.height = grid.rows;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-
-  const image = ctx.createImageData(grid.cols, grid.rows);
-  for (let r = 0; r < grid.rows; r++) {
-    for (let c = 0; c < grid.cols; c++) {
-      const i = cellIndex(grid, c, r);
-      const p = (r * grid.cols + c) * 4;
-      if (grid.blocked[i]) {
-        image.data[p] = 0x6d; image.data[p + 1] = 0x78; image.data[p + 2] = 0x86; image.data[p + 3] = 255;
-      } else if (grid.floor[i]) {
-        image.data[p] = 0x1b; image.data[p + 1] = 0x21; image.data[p + 2] = 0x29; image.data[p + 3] = 255;
-      } else {
-        image.data[p + 3] = 0;
-      }
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  return canvas;
 }
 
 export function MiniMap({
@@ -105,7 +80,6 @@ export function MiniMap({
   polyline = [],
   camera = null,
   comments = [],
-  objects = [],
   onPick,
   onWaypointPick,
   onCommentPick,
@@ -117,7 +91,7 @@ export function MiniMap({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const projRef = useRef<Projection | null>(null);
 
-  const image = useMemo(() => (grid ? gridImage(grid) : null), [grid]);
+  const plan = useMemo(() => (grid ? buildPlanLayer(grid) : null), [grid]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -147,25 +121,28 @@ export function MiniMap({
       return;
     }
 
-    const proj = projectionFor(grid, width, height);
+    const proj = projectionFor(plan?.extent ?? {
+      minX: grid.bounds.min.x, minZ: grid.bounds.min.z,
+      maxX: grid.bounds.max.x, maxZ: grid.bounds.max.z,
+    }, width, height);
     projRef.current = proj;
 
-    if (image) {
-      ctx.imageSmoothingEnabled = true;
+    if (plan?.fill) {
+      // Nearest-neighbour: smoothing bleeds the floor fill out past the wall
+      // line and the two stop agreeing about where the edge is.
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(
-        image, proj.offsetX, proj.offsetY,
-        (grid.bounds.max.x - grid.bounds.min.x) * proj.scale,
-        (grid.bounds.max.z - grid.bounds.min.z) * proj.scale,
+        plan.fill, proj.offsetX, proj.offsetY,
+        (plan.extent.maxX - plan.extent.minX) * proj.scale,
+        (plan.extent.maxZ - plan.extent.minZ) * proj.scale,
       );
     }
-
-    /* objects: faint dots for orientation */
-    ctx.fillStyle = 'rgba(152,162,176,0.55)';
-    for (const o of objects) {
-      const { sx, sy } = proj.toScreen(o.position[0], o.position[2]);
-      ctx.beginPath();
-      ctx.arc(sx, sy, 2, 0, Math.PI * 2);
-      ctx.fill();
+    if (plan) {
+      // Outlines last, so the line work sits on top of the fills. This is what
+      // makes the plan read as rooms and hallways rather than as a field of
+      // coloured cells.
+      strokeSegments(ctx, plan.wallOutline, proj, DEFAULT_PLAN_COLOURS.wallOutline, 1);
+      strokeSegments(ctx, plan.openOutline, proj, DEFAULT_PLAN_COLOURS.outline, 1.25);
     }
 
     /* the generated route */
@@ -261,7 +238,7 @@ export function MiniMap({
       ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
       ctx.fillText(hint, 8, height - 8);
     }
-  }, [grid, image, waypoints, selectedId, polyline, camera, comments, objects, height, title, hint]);
+  }, [grid, plan, waypoints, selectedId, polyline, camera, comments, height, title, hint]);
 
   useEffect(() => {
     draw();
