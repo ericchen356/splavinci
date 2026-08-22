@@ -86,8 +86,14 @@ export const ASSET_SETS: Record<string, AssetSet> = {
     collider: '/hobbiton/collider.glb',
     objects: '/hobbiton/objects.json',
     // Y-down capture: flip about X, then lift so median ground sits at y = 0.
-    // Must match public/hobbiton/scene.json.
-    placement: { position: [0, 0.8003, 0], rotation: [Math.PI, 0, 0], scale: 1 },
+    //
+    // MUST match public/hobbiton/scene.json, which scripts/spz-collider.mjs
+    // writes alongside the collider. The offset is derived from the capture's
+    // own median terrain, so it changes whenever the collider is regenerated
+    // at a different cell size - and a stale value here does not fail, it just
+    // floats the splat off its own collider (it was 93mm out). The generator
+    // prints the exact line to paste; keep them in step.
+    placement: { position: [0, 0.8933, 0], rotation: [Math.PI, 0, 0], scale: 1 },
     approxSplats: 4_000_000,
     defaultQualityId: 'balanced',
     qualities: [

@@ -379,3 +379,12 @@ writeFileSync(join(outDir, 'scene.json'), JSON.stringify({
   },
 }, null, 2) + '\n');
 console.log('scene.json written');
+
+// The app reads its placement from a hand-maintained constant in lib/assets.ts,
+// not from scene.json, so a regeneration silently floats the splat off its own
+// collider unless that constant is updated too. Print the exact line.
+console.log(
+  '\nIf this capture is wired into lib/assets.ts, its placement must now read:\n' +
+  `    placement: { position: [0, ${groundOffset.toFixed(4)}, 0], ` +
+  'rotation: [Math.PI, 0, 0], scale: 1 },',
+);

@@ -83,12 +83,14 @@ export type PathInput = {
  */
 export type PathCache = {
   grid: WalkGrid | null;
+  /** The exact ColliderData the grid was built from. Identity, not a hash. */
+  collider: ColliderData | null;
   gridKey: string;
   legs: Map<string, LegResult>;
 };
 
 export function createPathCache(): PathCache {
-  return { grid: null, gridKey: '', legs: new Map() };
+  return { grid: null, collider: null, gridKey: '', legs: new Map() };
 }
 
 function round(n: number, places = 3): number {
@@ -127,6 +129,17 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       message: 'No collider loaded, so there is nothing to route around yet.',
     }]);
   }
+  const nonFinite = waypoints.filter((w) => !w.position.every(Number.isFinite));
+  if (nonFinite.length > 0) {
+    return withWarnings(EMPTY_PATH, [{
+      code: 'degenerate-segment', severity: 'error',
+      waypointIds: nonFinite.map((w) => w.id),
+      message:
+        `${nonFinite.length} waypoint(s) have a non-finite position and cannot be routed. ` +
+        `A single NaN coordinate propagates through every frame's lookAt.`,
+    }]);
+  }
+
   if (waypoints.length === 0) {
     return withWarnings(EMPTY_PATH, [{
       code: 'no-waypoints', severity: 'info', waypointIds: [],
@@ -135,14 +148,20 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   }
 
   /* ---- grid (cached across calls; only rebuilt when inputs change) ---- */
-  const gridKey = JSON.stringify({
-    tris: input.collider.triangleCount,
-    names: input.collider.meshNames,
-    grid: input.options?.grid ?? null,
-  });
+  //
+  // Keyed on the ColliderData OBJECT, not on a fingerprint of it. The previous
+  // key was {triangleCount, meshNames, gridOptions}, which two different
+  // colliders can share: moving a wall changes neither count nor names, and a
+  // fused Marble export always reports meshNames ['geometry_0'], so only the
+  // triangle count distinguishes two captures. When the fingerprint matched,
+  // both the grid AND every cached leg were kept, so the camera routed around
+  // a wall that had moved and through one that had not. Identity cannot
+  // collide, and getWalkGrid's WeakMap is keyed the same way.
+  const gridKey = JSON.stringify(input.options?.grid ?? null);
   const gt0 = now();
-  if (!cache.grid || cache.gridKey !== gridKey) {
+  if (!cache.grid || cache.collider !== input.collider || cache.gridKey !== gridKey) {
     cache.grid = getWalkGrid(input.collider, opts.grid);
+    cache.collider = input.collider;
     cache.gridKey = gridKey;
     // The grid moved under the cached legs, so none of them are valid.
     cache.legs.clear();
@@ -420,6 +439,23 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     }
   }
 
+  // A non-finite frame is unrecoverable downstream: it writes NaN straight
+  // into the camera matrix, and the scrub bar's `duration <= 0` guard does not
+  // catch NaN (NaN <= 0 is false), so the playhead becomes NaN for the rest of
+  // the session. Refuse to emit the table rather than let that escape.
+  const badFrame = frames.findIndex(
+    (f) => !Number.isFinite(f.timeSeconds) ||
+      !f.position.every(Number.isFinite) || !f.lookAt.every(Number.isFinite),
+  );
+  if (badFrame >= 0) {
+    return withWarnings(EMPTY_PATH, [...warnings, {
+      code: 'degenerate-segment', severity: 'error', waypointIds: [],
+      message:
+        `Generation produced a non-finite camera frame at index ${badFrame}; ` +
+        `no path was emitted. This usually means the collider has no usable floor.`,
+    }]);
+  }
+
   // Bound the worst-case view rotation across the whole table.
   const clampedFrames = limitTurnRate(frames, opts.fps, opts.maxTurnRateDegPerSec);
 
@@ -569,7 +605,10 @@ function computeLeg(
   if (res.snappedStart || res.snappedGoal) {
     warnings.push({
       code: 'waypoint-snapped', severity: 'warning',
-      waypointIds: [res.snappedStart ? a.id : b.id].filter(Boolean),
+      waypointIds: [
+        ...(res.snappedStart ? [a.id] : []),
+        ...(res.snappedGoal ? [b.id] : []),
+      ],
       message:
         `${res.snappedStart ? a.id : b.id} sits inside a wall or off the floor; ` +
         `it was nudged to the nearest spot the camera can occupy.`,
@@ -584,8 +623,22 @@ function computeLeg(
   );
 
   if (!built || built.length < 1e-4) {
+    // Promised in PathWarningCode and previously never produced: a leg with no
+    // length is 0.4s of the camera sitting still, and an empty polyline draws
+    // no route on the mini-map for that stretch.
+    warnings.push({
+      code: 'degenerate-segment', severity: 'info', waypointIds: [a.id, b.id],
+      message:
+        `${a.id} and ${b.id} are in the same spot, so there is nothing to travel; ` +
+        `the camera holds briefly between their shots.`,
+    });
+    const hold = new THREE.Vector3(
+      a.position[0],
+      cameraYAt(grid, a.position, opts.cameraHeight, fallbackFloorY),
+      a.position[2],
+    );
     return {
-      curve: null, length: 0, duration: 0.4, polyline: [], warnings,
+      curve: null, length: 0, duration: 0.4, polyline: [vec3(hold)], warnings,
       startTangent: null, endTangent: null, hasLookTargets: true,
     };
   }

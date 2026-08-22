@@ -468,6 +468,13 @@ export function gridStats(grid: WalkGrid): {
  * points the camera at nothing. Trimming to the middle 90% of walkable cells
  * lands on the part of the scene a person would call "the scene".
  */
+function isFiniteBox(box: THREE.Box3): boolean {
+  return (
+    Number.isFinite(box.min.x) && Number.isFinite(box.min.z) &&
+    Number.isFinite(box.max.x) && Number.isFinite(box.max.z)
+  );
+}
+
 export function denseBounds(grid: WalkGrid, trim = 0.05): THREE.Box3 {
   const xs: number[] = [];
   const zs: number[] = [];
@@ -489,7 +496,13 @@ export function denseBounds(grid: WalkGrid, trim = 0.05): THREE.Box3 {
     }
   }
 
-  if (xs.length === 0) return grid.bounds.clone();
+  // An empty or degenerate collider leaves grid.bounds as THREE's empty box
+  // (+Infinity min, -Infinity max). Returning it produces a centre of
+  // (Inf + -Inf)/2 = NaN, which every auto shot then aims at, and the NaN
+  // reaches every frame's lookAt with no warning anywhere.
+  if (xs.length === 0 || !isFiniteBox(grid.bounds)) {
+    return new THREE.Box3(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 0, 1));
+  }
 
   xs.sort((a, b) => a - b);
   zs.sort((a, b) => a - b);
