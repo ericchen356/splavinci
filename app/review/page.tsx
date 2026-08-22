@@ -414,14 +414,6 @@ export default function ReviewPage() {
             if (c) jumpToComment(c);
           }}
           height={240}
-          title="Top-down"
-          hint={
-            recording
-              ? 'capture in progress'
-              : playing
-                ? 'pause to leave a comment'
-                : 'click to leave a comment'
-          }
         />
 
         {showStale && (

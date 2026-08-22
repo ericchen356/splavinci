@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import type { PanSector, ShotType, Vec3 } from '@/lib/types';
+import type { ShotAim, ShotType, Vec3 } from '@/lib/types';
 import { easeInOut } from './curve';
 
 export type ShotContext = {
@@ -28,7 +28,7 @@ export type ShotContext = {
   /** True when `target` is a real point to frame rather than the anchor itself. */
   hasTarget: boolean;
   /** Explicit arc for a pan, in absolute bearings. Null derives one. */
-  panSector?: PanSector | null;
+  aim?: ShotAim | null;
 };
 
 export type CameraSample = { position: THREE.Vector3; lookAt: THREE.Vector3 };
@@ -75,11 +75,24 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
   const k = Math.max(0, ctx.intensity);
   const t = Math.max(0, Math.min(1, u));
   const anchor = ctx.anchor;
-  const target = ctx.target;
+
+  // An explicit aim replaces whatever the shot inferred to frame. Applied here,
+  // once, so every shot type honours it rather than only the sweeping ones -
+  // a push-in at a blank wall is just as wrong as a pan across one, and the
+  // only other way out was to move the waypoint.
+  const aimed = ctx.aim
+    ? new THREE.Vector3(
+        anchor.x + Math.cos(ctx.aim.from) * Math.max(AMPLITUDE.minTargetRadius, horizontalDelta(anchor, ctx.target).length()),
+        ctx.target.y,
+        anchor.z + Math.sin(ctx.aim.from) * Math.max(AMPLITUDE.minTargetRadius, horizontalDelta(anchor, ctx.target).length()),
+      )
+    : ctx.target;
+  const target = aimed;
 
   const toTarget = horizontalDelta(anchor, target);
   const radius = Math.max(AMPLITUDE.minTargetRadius, toTarget.length());
-  const hasTarget = ctx.hasTarget && toTarget.lengthSq() > 1e-6;
+  // An aimed shot always has something to point at, by construction.
+  const hasTarget = ctx.aim ? true : ctx.hasTarget && toTarget.lengthSq() > 1e-6;
 
   switch (shotType) {
     case 'hold':
@@ -104,9 +117,12 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
       );
       const centre = anchor.clone().addScaledVector(dir, orbitRadius);
       // Sweep centred on the waypoint's own bearing, so the shot starts where
-      // the camera already is rather than teleporting to the arc's start.
+      // the camera already is rather than teleporting to the arc's start -
+      // unless an explicit arc says otherwise, which is then taken verbatim.
       const start = Math.atan2(anchor.z - centre.z, anchor.x - centre.x);
-      const angle = start + (t - 0.5) * AMPLITUDE.orbitSweep * k;
+      const angle = ctx.aim && Math.abs(ctx.aim.sweep) > 1e-4
+        ? start + ctx.aim.sweep * (t - 0.5)
+        : start + (t - 0.5) * AMPLITUDE.orbitSweep * k;
       return {
         position: new THREE.Vector3(
           centre.x + Math.cos(angle) * orbitRadius,
@@ -151,8 +167,8 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
       const travelled = AMPLITUDE.panDrift * k * (t - 0.5);
       const eye = anchor.clone().addScaledVector(drift, travelled);
 
-      if (ctx.panSector) {
-        const angle = ctx.panSector.from + ctx.panSector.sweep * t;
+      if (ctx.aim) {
+        const angle = ctx.aim.from + ctx.aim.sweep * t;
         return {
           position: eye,
           lookAt: new THREE.Vector3(

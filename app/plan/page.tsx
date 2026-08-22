@@ -200,8 +200,6 @@ export default function PlanPage() {
             onWaypointPick={select}
             onWaypointDrag={dragOnMap}
             height={230}
-            title="Top-down"
-            hint="click to place · click a marker to edit · drag one to move it"
           />
         </div>
 
@@ -237,10 +235,6 @@ export default function PlanPage() {
             checked={assets.showCollider}
             onChange={assets.setShowCollider}
           />
-          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4, lineHeight: 1.4 }}>
-            The wireframe is the geometry the router treats as walls — worth a look when a
-            path takes a turn you did not expect.
-          </div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -257,11 +251,6 @@ export default function PlanPage() {
               </button>
             ))}
           </div>
-          <p style={{ margin: '7px 0 0', fontSize: 11, color: 'var(--muted)', lineHeight: 1.45 }}>
-            Drag to look · WASD or arrows to move · E/Space up, Q down · Shift to
-            sprint. Click the floor without dragging to drop a waypoint, and drag
-            a marker on the mini-map to move one.
-          </p>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -276,7 +265,6 @@ export default function PlanPage() {
                 title={STYLE_BLURB[s]}
               >
                 <div style={{ fontSize: 12 }}>{s}</div>
-                <div style={{ fontSize: 10, color: 'var(--muted)' }}>{STYLE_BLURB[s]}</div>
               </button>
             ))}
           </div>
@@ -337,21 +325,12 @@ export default function PlanPage() {
               onRemove={() => removeWaypoint(selected.id)}
               onReorder={(d) => reorderWaypoint(selected.id, d)}
               onClose={() => select(null)}
-              footer={
-                <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 10, lineHeight: 1.45 }}>
-                  The dashed amber sweep in the viewport and on the mini-map is
-                  this shot at the current move size.
-                </div>
-              }
             />
           </div>
         )}
 
         <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
           <div style={sectionLabel}>Waypoints ({waypoints.length})</div>
-          {waypoints.length === 0 &&
-            'Click the floor in 3D, or anywhere on the mini-map, to drop a waypoint.'}
-          {waypoints.length > 0 && !selected && 'Select a waypoint to set its shot.'}
           <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0' }}>
             {waypoints.map((w, i) => {
               const shot = path?.shots.find((s) => s.waypointId === w.id);

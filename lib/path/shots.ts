@@ -22,7 +22,7 @@
 import type * as THREE from 'three';
 import {
   EMPHASIS_RANGE,
-  type PanSector,
+  type ShotAim,
   type PathStyle,
   type ShotType,
   type Vec3,
@@ -102,9 +102,9 @@ export type ShotIntent = {
    * what the shot is already doing rather than a blank control the user has to
    * guess at - and so nudging it is a small edit, not an invention.
    */
-  panSector: PanSector;
+  aim: ShotAim;
   /** True when the sector came from the waypoint rather than being derived. */
-  panSectorExplicit: boolean;
+  aimExplicit: boolean;
   /** Short human-readable justification, shown in the waypoint panel. */
   reason: string;
 };
@@ -413,7 +413,7 @@ export function resolveShot(
     targetPoint[0] - waypoint.position[0],
   );
   const derivedSweep = DEFAULT_PAN_SWEEP * intensity;
-  const panSector: PanSector = waypoint.panSector ?? {
+  const aim: ShotAim = waypoint.aim ?? {
     from: bearing - derivedSweep / 2,
     sweep: derivedSweep,
   };
@@ -432,8 +432,8 @@ export function resolveShot(
     targetPoint,
     targetDistance,
     wallDistance: reading?.clearance ?? 0,
-    panSector,
-    panSectorExplicit: waypoint.panSector !== null,
+    aim,
+    aimExplicit: waypoint.aim !== null,
     source,
     emphasis,
     autoShotType,

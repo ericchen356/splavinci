@@ -15,7 +15,7 @@ const collider = await loadColliderFromDisk('public/sample-room/collider.glb');
 
 const wp = (id: string, x: number, z: number, extra: Partial<Waypoint> = {}): Waypoint => ({
   id, position: [x, 0, z], shotType: 'orbit',
-  mode: 'auto', duration: 4, emphasis: 1, panSector: null, pinned: false, ...extra,
+  mode: 'auto', duration: 4, emphasis: 1, aim: null, pinned: false, ...extra,
 });
 
 const waypoints: Waypoint[] = [

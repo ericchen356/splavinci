@@ -111,7 +111,7 @@ export function CapturePicker() {
               className={isActive ? 'primary' : undefined}
               disabled={missing}
               onClick={() => requestSwitch(set.id)}
-              title={missing ? `${set.collider} is not on this machine` : undefined}
+              title={missing ? `${set.collider} is not on this machine` : set.description}
               style={{
                 textAlign: 'left',
                 padding: '7px 9px',
@@ -119,16 +119,11 @@ export function CapturePicker() {
               }}
             >
               <div style={{ fontSize: 12 }}>{set.label}</div>
-              <div style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.35 }}>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>
                 {missing ? (
-                  <span style={{ color: 'var(--warn)' }}>
-                    assets not found — this capture is not in the repo
-                  </span>
+                  <span style={{ color: 'var(--warn)' }}>assets not found</span>
                 ) : (
-                  <>
-                    {set.approxSplats ? `${(set.approxSplats / 1e6).toFixed(2)}M splats · ` : ''}
-                    {set.description}
-                  </>
+                  set.approxSplats ? `${(set.approxSplats / 1e6).toFixed(2)}M splats` : null
                 )}
               </div>
             </button>
@@ -194,7 +189,7 @@ export function CapturePicker() {
               const q = active.qualities.find((x) => x.id === assets.qualityId);
               if (!q) return null;
               return `${(q.approxSplats / 1e6).toFixed(0)}M splats · ` +
-                     `${(q.approxBytes / 1e6).toFixed(0)} MB` + (q.note ? ` · ${q.note}` : '');
+                     `${(q.approxBytes / 1e6).toFixed(0)} MB`;
             })()}
           </div>
         </div>

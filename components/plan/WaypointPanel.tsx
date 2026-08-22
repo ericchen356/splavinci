@@ -20,6 +20,7 @@
  * its technique label.
  */
 
+import { AimDial } from './AimDial';
 import {
   EMPHASIS_RANGE,
   SHOT_TYPES,
@@ -56,6 +57,9 @@ export function WaypointPanel({
 }: WaypointPanelProps) {
   const intent = resolveShot(waypoint, grid, style);
   const manual = waypoint.mode === 'manual';
+  // Only these swing; the rest just need a direction, so the dial drops its
+  // second handle rather than offering an arc that would do nothing.
+  const sweeps = intent.shotType === 'pan' || intent.shotType === 'orbit';
 
   return (
     <div
@@ -121,12 +125,12 @@ export function WaypointPanel({
           fontSize: 12,
         }}
       >
-        <div style={{ marginBottom: 4 }}>
+        <div title={intent.reason}>
           <strong style={{ color: 'var(--accent)' }}>{intent.shotType}</strong>
           <span style={{ color: 'var(--muted)' }}> for </span>
           <strong>{intent.duration.toFixed(1)}s</strong>
         </div>
-        <div style={{ color: 'var(--muted)', lineHeight: 1.4 }}>{intent.reason}</div>
+
       </div>
 
       {/* ---- manual parameters, shown only when they apply ---- */}
@@ -165,10 +169,27 @@ export function WaypointPanel({
         </>
       )}
 
+      {/* ---- where the shot points ---- */}
+      <div style={row}>
+        <div style={labelStyle}>
+          <span>{sweeps ? 'Sweep' : 'Facing'}</span>
+          <span style={{ fontSize: 10 }}>{intent.aimExplicit ? 'set by you' : 'auto'}</span>
+        </div>
+        <AimDial
+          aim={intent.aim}
+          sweeps={sweeps}
+          explicit={intent.aimExplicit}
+          onChange={(aim) => onChange({ aim })}
+          onReset={() => onChange({ aim: null })}
+        />
+      </div>
+
       {/* ---- emphasis: meaningful in both modes ---- */}
       <div style={row}>
         <div style={labelStyle}>
-          <span>Move size</span>
+          <span title="How far the camera travels during the shot: the sweep of an orbit, the reach of a push-in.">
+            Move size
+          </span>
           <span style={{ color: 'var(--text)' }}>
             {Math.round(waypoint.emphasis * 100)}%
             {Math.abs(waypoint.emphasis - 1) < 0.01 ? ' (style default)' : ''}
@@ -182,10 +203,6 @@ export function WaypointPanel({
           value={waypoint.emphasis}
           onChange={(e) => onChange({ emphasis: Number(e.target.value) })}
         />
-        <div style={{ fontSize: 10, color: 'var(--muted)' }}>
-          How far the camera travels during the shot — the sweep of an orbit, the
-          reach of a push-in. Scales whatever the shot is, auto or manual.
-        </div>
       </div>
 
       <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>

@@ -78,7 +78,7 @@ export function makeWaypoint(position: Vec3): Waypoint {
     duration: 4,
     emphasis: 1,
     // Null lets the generator pick an arc; the dial sets it explicitly.
-    panSector: null,
+    aim: null,
     pinned: false,
   };
 }

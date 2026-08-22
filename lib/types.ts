@@ -64,32 +64,33 @@ export type Waypoint = {
    */
   emphasis: number;
   /**
-   * Which arc a pan sweeps. Null lets the generator choose one.
+   * Where this shot points. Null lets the generator choose.
    *
    * Authoritative when set, and deliberately not scaled by emphasis: naming an
-   * arc IS the amplitude, and having a second control quietly shrink it would
+   * arc IS the amplitude, and a second control quietly shrinking it would
    * reproduce exactly the problem the auto/manual blend had.
    */
-  panSector: PanSector | null;
+  aim: ShotAim | null;
   /** True once the user has dragged or edited this waypoint; marks it and its
    *  immediate neighbours for targeted recompute instead of a full rebuild. */
   pinned: boolean;
 };
 
 /**
- * An explicit arc for a pan, in absolute world bearings.
+ * Where a shot points, and how far it swings, in absolute world bearings.
  *
- * Bearings, not an offset from whatever the shot happens to frame: a pan is
- * "sweep from the window across to the fireplace", and that arc belongs to the
- * room. Tying it to the auto-chosen target would move the shot whenever the
- * target changed.
+ * Bearings belong to the room, not to whatever the shot happens to have
+ * chosen to frame: "sweep from the window across to the fireplace" stays put
+ * when the inferred target changes, an offset would not. Without this the
+ * only recourse for a shot aimed at a blank wall was to move the waypoint.
  *
- * `from` is a bearing in radians, measured the same way as
- * Math.atan2(dz, dx). `sweep` is signed, so direction is explicit and an arc
- * wider than half a turn is representable - neither is true if you store two
- * endpoints and infer the shorter way round.
+ * `from` is a bearing in radians, measured like Math.atan2(dz, dx). `sweep` is
+ * signed, so direction is explicit and an arc wider than half a turn is
+ * representable - neither is true if you store two endpoints and infer the
+ * shorter way round. A sweep of 0 means "face this way and hold", which is
+ * what the shots that do not swing use.
  */
-export type PanSector = {
+export type ShotAim = {
   from: number;
   sweep: number;
 };

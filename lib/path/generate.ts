@@ -107,7 +107,7 @@ function waypointKey(w: Waypoint): string {
     w.shotType,
     round(w.duration, 2),
     round(w.emphasis, 3),
-    w.panSector ? `${round(w.panSector.from, 4)}:${round(w.panSector.sweep, 4)}` : '-',
+    w.aim ? `${round(w.aim.from, 4)}:${round(w.aim.sweep, 4)}` : '-',
   ].join('|');
 }
 
@@ -317,7 +317,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       // A waypoint whose target resolved to its own column has nothing to
       // frame; the shot falls back to its direction of travel.
       hasTarget: intent.targetDistance > 1e-6,
-      panSector: intent.panSector,
+      aim: intent.aim,
     };
     const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius);
     fittedShots.set(index, fitted);
