@@ -69,15 +69,13 @@ async function urlExists(url: string): Promise<boolean> {
  * the .spz is not there. Never throws — returns null only when both are gone.
  */
 export async function resolveSplatSource(): Promise<SplatResolution | null> {
-  if (await urlExists(ASSETS.splat)) {
-    return { url: ASSETS.splat, kind: splatKindFor(ASSETS.splat), usedFallback: false };
+  const preferred = ASSETS.splat;
+  if (await urlExists(preferred)) {
+    return { url: preferred, kind: splatKindFor(preferred), usedFallback: false };
   }
-  if (await urlExists(ASSETS.splatFallback)) {
-    return {
-      url: ASSETS.splatFallback,
-      kind: splatKindFor(ASSETS.splatFallback),
-      usedFallback: true,
-    };
+  const fallback = ASSETS.splatFallback;
+  if (fallback && (await urlExists(fallback))) {
+    return { url: fallback, kind: splatKindFor(fallback), usedFallback: true };
   }
   return null;
 }

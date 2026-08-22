@@ -13,6 +13,12 @@
 
 import { create } from 'zustand';
 import type { SceneObject } from '@/lib/types';
+import {
+  getActiveAssetSetId,
+  setActiveAssetSet,
+  type AssetSet,
+  getAssetSet,
+} from '@/lib/assets';
 import type {
   ColliderState,
   LoadedObject,
@@ -57,6 +63,10 @@ const INITIAL_OBJECTS: ObjectsState = {
 };
 
 export type RoomStore = {
+  /** Which capture is loaded. Changing it reloads every asset. */
+  assetSetId: string;
+  /** The active set's full definition, including the splat placement. */
+  assetSet: AssetSet;
   splat: SplatState;
   collider: ColliderState;
   objects: ObjectsState;
@@ -74,6 +84,8 @@ export type RoomStore = {
   loadRoom(): Promise<void>;
   /** Drop everything and load again (dev affordance / retry button). */
   reloadRoom(): Promise<void>;
+  /** Switch capture and reload. No-op when already active. */
+  switchAssetSet(id: string): Promise<void>;
 
   /* Splat status is pushed in by the R3F layer, which owns the Spark objects. */
   beginSplat(): Promise<string | null>;
@@ -83,6 +95,8 @@ export type RoomStore = {
 };
 
 export const useRoomStore = create<RoomStore>((set, get) => ({
+  assetSetId: getActiveAssetSetId(),
+  assetSet: getAssetSet(),
   splat: INITIAL_SPLAT,
   collider: INITIAL_COLLIDER,
   objects: INITIAL_OBJECTS,
@@ -105,6 +119,12 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
     if (roomLoad) return roomLoad;
     roomLoad = runRoomLoad(set);
     return roomLoad;
+  },
+
+  async switchAssetSet(id) {
+    if (!setActiveAssetSet(id)) return;
+    set({ assetSetId: id, assetSet: getAssetSet(id) });
+    return get().reloadRoom();
   },
 
   async reloadRoom() {

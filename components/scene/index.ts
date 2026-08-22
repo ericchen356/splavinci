@@ -17,3 +17,4 @@ export {
   type CameraRigProps,
 } from './CameraRig';
 export { AssetStatusPanel, type AssetStatusPanelProps } from './AssetStatusPanel';
+export { CapturePicker } from './CapturePicker';

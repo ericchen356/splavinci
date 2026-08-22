@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { RoomScene } from '@/components/scene/RoomScene';
+import { CapturePicker } from '@/components/scene/CapturePicker';
 import {
   CameraRig,
   CameraPresetDriver,
@@ -104,6 +105,10 @@ export default function ScenePage() {
           gap: 10,
         }}
       >
+        <Panel title="Capture">
+          <CapturePicker />
+        </Panel>
+
         <Panel title="Camera">
           <SegmentedControl
             value={mode}

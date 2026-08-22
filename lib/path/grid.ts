@@ -20,7 +20,7 @@
  */
 
 import * as THREE from 'three';
-import { worldTriangleSoup, type ColliderData } from '@/lib/scene/collider';
+import type { ColliderData } from '@/lib/scene/collider';
 
 export type WalkGrid = {
   cellSize: number;
@@ -39,8 +39,8 @@ export type WalkGrid = {
   /** World-space distance to the nearest blocked-or-void cell. */
   clearance: Float32Array;
   bounds: THREE.Box3;
-  /** The vertical slice tested for obstacles. */
-  band: { min: number; max: number };
+  /** Camera corridor, as offsets above each cell's OWN floor height. */
+  band: { low: number; high: number };
 };
 
 export type GridOptions = {
@@ -207,25 +207,20 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
   const floor = new Uint8Array(count);
   const floorY = new Float32Array(count).fill(NaN);
 
-  // The camera corridor is measured from the dominant floor height, so a
-  // capture whose floor is not at y=0 still gets a sensible band.
-  const baseY = Number.isFinite(collider.floorBounds.max.y)
-    ? collider.floorBounds.max.y
-    : bounds.min.y;
+  // The corridor is expressed as offsets above each cell's own floor, not as
+  // absolute world heights - see the obstacle pass below for why.
   const band = {
-    min: baseY + (options.bandLow ?? DEFAULTS.bandLow),
-    max: baseY + (options.bandHigh ?? DEFAULTS.bandHigh),
+    low: options.bandLow ?? DEFAULTS.bandLow,
+    high: options.bandHigh ?? DEFAULTS.bandHigh,
   };
 
   const rasterise = (
     geometry: THREE.BufferGeometry,
-    heightFilter: ((minY: number, maxY: number) => boolean) | null,
-    onCell: (index: number, triMaxY: number) => void,
+    onCell: (index: number, triMinY: number, triMaxY: number) => void,
   ) => {
     forEachTriangle(geometry, (ax, ay, az, bx, by, bz, cx, cy, cz) => {
       const triMinY = Math.min(ay, by, cy);
       const triMaxY = Math.max(ay, by, cy);
-      if (heightFilter && !heightFilter(triMinY, triMaxY)) return;
 
       const loX = Math.min(ax, bx, cx);
       const hiX = Math.max(ax, bx, cx);
@@ -246,36 +241,50 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
           if (!triangleOverlapsCell(ax, az, bx, bz, cx, cz, cellMinX, cellMinZ, cellMaxX, cellMaxZ)) {
             continue;
           }
-          onCell(r * cols + c, triMaxY);
+          onCell(r * cols + c, triMinY, triMaxY);
         }
       }
     });
   };
 
-  // Floor first: record presence and the highest surface seen per cell.
-  rasterise(collider.floorGeometry, null, (i, triMaxY) => {
+  // Floor first: presence, and the highest surface seen per cell.
+  rasterise(collider.floorGeometry, (i, _triMinY, triMaxY) => {
     floor[i] = 1;
     if (Number.isNaN(floorY[i]) || triMaxY > floorY[i]) floorY[i] = triMaxY;
   });
 
-  // Obstacles: only what actually intrudes into the camera's vertical corridor.
-  // A floor slab or a low sill never enters the band, so it never blocks.
+  const fallbackFloorY = Number.isFinite(collider.floorBounds.max.y)
+    ? collider.floorBounds.max.y
+    : bounds.min.y;
+
+  // Obstacles: accumulate the vertical span of obstacle geometry over each
+  // cell, then test that span against the band above THAT CELL'S OWN floor.
   //
-  // Filtered per MESH, not per triangle, and deliberately so. A solid wall's
-  // side faces project to thin lines in XZ while its top and bottom caps sit
-  // outside the band; testing triangles individually would rasterise only those
-  // slivers and leave the wall's interior cells marked walkable - a phantom
-  // corridor straight through the wall once the grid is coarse enough for the
-  // gap to exceed the camera radius. Taking the whole mesh when its bounds
-  // intrude gives the solid footprint the caps describe.
-  for (const mesh of collider.obstacleMeshes) {
-    const meshBox = new THREE.Box3().setFromObject(mesh);
-    if (meshBox.max.y < band.min || meshBox.min.y > band.max) continue;
-    const soup = worldTriangleSoup([mesh]);
-    rasterise(soup, null, (i) => {
+  // Per cell, and against local floor height, for two distinct reasons:
+  //
+  //  - A solid wall's side faces project to thin lines in XZ, while its top and
+  //    bottom caps sit outside the corridor. Filtering triangles individually
+  //    rasterises only those slivers and leaves the wall's interior walkable -
+  //    a phantom corridor straight through it once cells are coarse enough.
+  //    Accumulating a span per cell lets the caps contribute their heights
+  //    across the whole footprint, so the interior blocks like the solid it is.
+  //  - A single global band assumes a flat floor. On terrain derived from a
+  //    real capture the ground can climb many metres across the scene, and a
+  //    band pinned to the highest floor point floats above everything: nothing
+  //    intersects it and not one cell comes out blocked.
+  const obstacleMinY = new Float32Array(count).fill(Infinity);
+  const obstacleMaxY = new Float32Array(count).fill(-Infinity);
+  rasterise(collider.obstacleGeometry, (i, triMinY, triMaxY) => {
+    if (triMinY < obstacleMinY[i]) obstacleMinY[i] = triMinY;
+    if (triMaxY > obstacleMaxY[i]) obstacleMaxY[i] = triMaxY;
+  });
+
+  for (let i = 0; i < count; i++) {
+    if (obstacleMaxY[i] === -Infinity) continue;
+    const base = Number.isNaN(floorY[i]) ? fallbackFloorY : floorY[i];
+    if (obstacleMaxY[i] >= base + band.low && obstacleMinY[i] <= base + band.high) {
       blocked[i] = 1;
-    });
-    soup.dispose();
+    }
   }
 
   const walkable = new Uint8Array(count);

@@ -9,3 +9,7 @@ next-env.d.ts
 # large splat captures - keep out of git
 *.spz
 *.ply
+
+# derived from a local capture that is not in the repo
+public/hobbiton/
+public/derived/

@@ -80,6 +80,11 @@ export function RoomScene({
 }: RoomSceneProps) {
   const assets = useRoomAssets();
 
+  // Default the splat placement from the active capture. A Y-down capture
+  // rendered with the identity transform comes out upside down, and every
+  // camera and path assumption inverts with it.
+  const placement = splatTransform ?? assets.assetSet.placement;
+
   const wireframeOn = showCollider ?? assets.showCollider;
   const floorPickable =
     pickableFloor ?? Boolean(onFloorClick || onFloorPointerDown || onFloorPointerMove);
@@ -92,7 +97,7 @@ export function RoomScene({
       <hemisphereLight args={['#dfe7f5', '#2a2620', 0.6]} />
       <directionalLight position={[6, 9, 4]} intensity={0.55} />
 
-      {showSplat ? <SplatLayer transform={splatTransform} opacity={splatOpacity} /> : null}
+      {showSplat ? <SplatLayer transform={placement} opacity={splatOpacity} /> : null}
 
       <ColliderLayer
         collider={assets.colliderData}

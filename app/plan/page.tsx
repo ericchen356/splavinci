@@ -15,7 +15,7 @@
 import { useCallback, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import Link from 'next/link';
-import { CameraRig, RoomScene } from '@/components/scene';
+import { CameraRig, CapturePicker, RoomScene } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
@@ -116,6 +116,11 @@ export default function PlanPage() {
           background: 'var(--bg)', overflowY: 'auto', padding: 14,
         }}
       >
+        <div style={{ marginBottom: 16 }}>
+          <div style={sectionLabel}>Capture</div>
+          <CapturePicker />
+        </div>
+
         <div style={{ marginBottom: 16 }}>
           <div style={sectionLabel}>Style</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>

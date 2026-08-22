@@ -68,7 +68,9 @@ export function renderGrid(
 }
 
 if (process.argv[1]?.endsWith('path-lab.ts')) {
-  const collider = await loadColliderFromDisk('public/sample-room/collider.glb');
+  const colliderPath = process.argv[2] ?? 'public/sample-room/collider.glb';
+  const collider = await loadColliderFromDisk(colliderPath);
+  console.log('collider file   :', colliderPath);
   console.log('collider meshes :', collider.meshNames.join(', '));
   console.log('floor meshes    :', collider.floorMeshes.map((m) => m.name).join(', '));
   console.log('obstacles       :', collider.obstacleMeshes.map((m) => m.name).join(', '));
@@ -76,7 +78,7 @@ if (process.argv[1]?.endsWith('path-lab.ts')) {
 
   const grid = buildWalkGrid(collider);
   console.log('\ngrid            :', grid.cols, 'x', grid.rows, '@', grid.cellSize.toFixed(4), 'm');
-  console.log('band            : y', grid.band.min.toFixed(2), '..', grid.band.max.toFixed(2));
+  console.log('band            : floor +', grid.band.low, '..', grid.band.high);
   console.log('stats           :', JSON.stringify(gridStats(grid)));
   console.log('\nlegend: # wall/obstacle   . tight   - mid   + open   (blank = no floor)\n');
 

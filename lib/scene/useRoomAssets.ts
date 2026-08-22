@@ -13,6 +13,7 @@
 import { useEffect, useMemo } from 'react';
 import type * as THREE from 'three';
 import type { SceneObject, Vec3 } from '@/lib/types';
+import type { AssetSet } from '@/lib/assets';
 import type { ColliderData } from './collider';
 import type {
   ColliderState,
@@ -24,6 +25,11 @@ import type { FloorSampler } from './floor';
 import { useRoomStore } from './roomStore';
 
 export type RoomAssets = {
+  /* --- which capture is loaded --- */
+  assetSetId: string;
+  assetSet: AssetSet;
+  switchAssetSet(id: string): void;
+
   /* --- raw per-asset state, for honest status UI --- */
   splat: SplatState;
   collider: ColliderState;
@@ -75,6 +81,9 @@ function isSettled(phase: string): boolean {
 }
 
 export function useRoomAssets(): RoomAssets {
+  const assetSetId = useRoomStore((s) => s.assetSetId);
+  const assetSet = useRoomStore((s) => s.assetSet);
+  const switchAssetSet = useRoomStore((s) => s.switchAssetSet);
   const splat = useRoomStore((s) => s.splat);
   const collider = useRoomStore((s) => s.collider);
   const objects = useRoomStore((s) => s.objects);
@@ -101,6 +110,10 @@ export function useRoomAssets(): RoomAssets {
       .reduce((a, b) => a + b, 0) / 3;
 
     return {
+      assetSetId,
+      assetSet,
+      switchAssetSet: (id: string) => void switchAssetSet(id),
+
       splat,
       collider,
       objects,
@@ -126,6 +139,9 @@ export function useRoomAssets(): RoomAssets {
       reload: () => void reloadRoom(),
     };
   }, [
+    assetSetId,
+    assetSet,
+    switchAssetSet,
     splat,
     collider,
     objects,
