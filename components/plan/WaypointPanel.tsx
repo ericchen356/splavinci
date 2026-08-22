@@ -17,13 +17,14 @@
  */
 
 import { SHOT_TYPES, type PathStyle, type ShotType, type Waypoint } from '@/lib/types';
-import { resolveShot, type ShotObject } from '@/lib/path';
+import { resolveShot, type WalkGrid } from '@/lib/path';
 
 export type WaypointPanelProps = {
   waypoint: Waypoint;
   index: number;
   total: number;
-  objects: readonly ShotObject[];
+  /** The walk grid the auto end reads the walls from. Null before it loads. */
+  grid: WalkGrid | null;
   style: PathStyle;
   onChange: (patch: Partial<Omit<Waypoint, 'id'>>) => void;
   onRemove?: () => void;
@@ -40,10 +41,10 @@ const labelStyle: React.CSSProperties = {
 };
 
 export function WaypointPanel({
-  waypoint, index, total, objects, style,
+  waypoint, index, total, grid, style,
   onChange, onRemove, onReorder, onClose, footer,
 }: WaypointPanelProps) {
-  const intent = resolveShot(waypoint, objects, style);
+  const intent = resolveShot(waypoint, grid, style);
   const spectrum = waypoint.controlSpectrum;
   // Past the Auto end: the manual controls start doing something.
   const manualActive = spectrum > 0;
@@ -144,24 +145,9 @@ export function WaypointPanel({
         />
       </div>
 
-      {/* ---- framing target ---- */}
-      <div style={row}>
-        <div style={labelStyle}><span>Framing</span></div>
-        <select
-          value={waypoint.targetObjectId ?? ''}
-          onChange={(e) => onChange({ targetObjectId: e.target.value || null })}
-        >
-          <option value="">
-            Auto{intent.targetObjectId ? ` — nearest is ${intent.targetObjectId}` : ' — nothing nearby'}
-          </option>
-          {objects.map((o) => (
-            <option key={o.id} value={o.id}>{o.label ?? o.id}</option>
-          ))}
-        </select>
-      </div>
-
       <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>
         at ({waypoint.position[0].toFixed(2)}, {waypoint.position[2].toFixed(2)})
+        {grid ? ` · ${intent.wallDistance.toFixed(1)} m from the nearest wall` : ''}
         {waypoint.pinned ? ' · edited' : ''}
       </div>
 

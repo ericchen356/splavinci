@@ -30,7 +30,7 @@ import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { useRoomAssets } from '@/lib/scene';
-import { getWalkGrid, toShotObjects } from '@/lib/path';
+import { getWalkGrid } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { PATH_STYLES, type PathStyle, type Vec3 } from '@/lib/types';
 
@@ -58,7 +58,6 @@ export default function PlanPage() {
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
     [assets.colliderData],
   );
-  const objects = useMemo(() => toShotObjects(assets.loadedObjects), [assets.loadedObjects]);
   const selected = waypoints.find((w) => w.id === selectedId) ?? null;
   const selectedIndex = waypoints.findIndex((w) => w.id === selectedId);
 
@@ -103,8 +102,8 @@ export default function PlanPage() {
   );
 
   const onGenerate = useCallback(() => {
-    generate(assets.colliderData, objects);
-  }, [generate, assets.colliderData, objects]);
+    generate(assets.colliderData);
+  }, [generate, assets.colliderData]);
 
   const errors = path?.warnings.filter((w) => w.severity === 'error') ?? [];
   const notices = path?.warnings.filter((w) => w.severity !== 'error') ?? [];
@@ -117,7 +116,7 @@ export default function PlanPage() {
           <CameraRig mode={mode} target={preset.target} moveSpeed={flySpeed} />
           <CameraPresetDriver preset={preset} nonce={presetNonce} />
           <CameraTracker onChange={setPose} />
-          <RoomScene onFloorClick={dropAt3D} interactiveObjects={false}>
+          <RoomScene onFloorClick={dropAt3D}>
             <PlanOverlay
               waypoints={waypoints}
               selectedId={selectedId}
@@ -135,7 +134,6 @@ export default function PlanPage() {
             selectedId={selectedId}
             polyline={path?.polyline ?? []}
             camera={pose}
-            objects={assets.manifest}
             onPick={dropAtMap}
             onWaypointPick={select}
             height={230}
@@ -260,7 +258,7 @@ export default function PlanPage() {
             waypoint={selected}
             index={selectedIndex}
             total={waypoints.length}
-            objects={objects}
+            grid={grid}
             style={settings.style}
             onChange={(patch) => updateWaypoint(selected.id, patch)}
             onRemove={() => removeWaypoint(selected.id)}

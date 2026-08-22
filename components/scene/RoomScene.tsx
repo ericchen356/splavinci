@@ -11,7 +11,7 @@
  *
  *   <Canvas>
  *     <CameraRig mode="orbit" />
- *     <RoomScene interactiveObjects onFloorClick={place}>
+ *     <RoomScene onFloorClick={place}>
  *       <MyWaypointGizmos />
  *     </RoomScene>
  *   </Canvas>
@@ -23,17 +23,14 @@
 import type { ReactNode } from 'react';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '@/lib/types';
-import type { LoadedObject } from '@/lib/scene/assetTypes';
 import type { SplatTransform } from '@/lib/scene/splat';
 import { useRoomAssets } from '@/lib/scene/useRoomAssets';
 import { SplatLayer } from './SplatLayer';
 import { ColliderLayer } from './ColliderLayer';
-import { ObjectsLayer } from './ObjectsLayer';
 
 export type RoomSceneProps = {
   /* --- what to draw --- */
   showSplat?: boolean;
-  showObjects?: boolean;
   /**
    * Force the collider wireframe on/off. Omit to follow the shared store
    * toggle (`useRoomAssets().showCollider`), which is what /scene drives.
@@ -43,11 +40,6 @@ export type RoomSceneProps = {
   splatOpacity?: number;
 
   /* --- interaction --- */
-  /** Enable pointer events on the object meshes. */
-  interactiveObjects?: boolean;
-  highlightedObjectIds?: readonly string[];
-  onObjectClick?: (object: LoadedObject, event: ThreeEvent<MouseEvent>) => void;
-  onObjectHover?: (object: LoadedObject | null, event: ThreeEvent<PointerEvent>) => void;
   /**
    * Mount an invisible pickable floor. Turned on automatically when any of the
    * floor handlers below are supplied.
@@ -64,14 +56,9 @@ export type RoomSceneProps = {
 
 export function RoomScene({
   showSplat = true,
-  showObjects = true,
   showCollider,
   splatTransform,
   splatOpacity = 1,
-  interactiveObjects = false,
-  highlightedObjectIds,
-  onObjectClick,
-  onObjectHover,
   pickableFloor,
   onFloorClick,
   onFloorPointerDown,
@@ -91,7 +78,7 @@ export function RoomScene({
 
   return (
     <group name="room">
-      {/* A dim ambient + hemisphere pair so the object meshes read against the
+      {/* A dim ambient + hemisphere pair so mounted overlays read against the
           splat cloud without fighting it. Cheap, and no shadow maps. */}
       <ambientLight intensity={0.85} />
       <hemisphereLight args={['#dfe7f5', '#2a2620', 0.6]} />
@@ -106,15 +93,6 @@ export function RoomScene({
         onFloorClick={onFloorClick}
         onFloorPointerDown={onFloorPointerDown}
         onFloorPointerMove={onFloorPointerMove}
-      />
-
-      <ObjectsLayer
-        objects={assets.loadedObjects}
-        visible={showObjects}
-        interactive={interactiveObjects}
-        highlightedIds={highlightedObjectIds}
-        onObjectClick={onObjectClick}
-        onObjectHover={onObjectHover}
       />
 
       {children}

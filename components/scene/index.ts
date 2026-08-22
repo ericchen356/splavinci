@@ -7,7 +7,6 @@
 export { RoomScene, type RoomSceneProps } from './RoomScene';
 export { SplatLayer, type SplatLayerProps } from './SplatLayer';
 export { ColliderLayer, type ColliderLayerProps } from './ColliderLayer';
-export { ObjectsLayer, type ObjectsLayerProps } from './ObjectsLayer';
 export {
   CameraRig,
   CameraPresetDriver,

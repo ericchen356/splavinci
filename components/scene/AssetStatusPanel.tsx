@@ -41,7 +41,7 @@ function fileName(url: string | null): string {
 }
 
 export function AssetStatusPanel({ assets, autoCollapse = true, style }: AssetStatusPanelProps) {
-  const { splat, collider, objects } = assets;
+  const { splat, collider } = assets;
 
   const rows: { key: string; label: string; phase: AssetPhase; detail: string }[] = [
     {
@@ -72,17 +72,6 @@ export function AssetStatusPanel({ assets, autoCollapse = true, style }: AssetSt
               ? (collider.error ?? 'failed')
               : 'queued',
     },
-    {
-      key: 'objects',
-      label: 'Objects',
-      phase: objects.phase,
-      detail:
-        objects.phase === 'failed'
-          ? (objects.error ?? 'failed')
-          : objects.total > 0
-            ? `${objects.ready} / ${objects.total} meshes`
-            : 'reading manifest…',
-    },
   ];
 
   const collapsed = autoCollapse && assets.settled && !assets.hasFailure;
@@ -104,7 +93,8 @@ export function AssetStatusPanel({ assets, autoCollapse = true, style }: AssetSt
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
           <span style={{ color: PHASE_COLOR.loaded }}>●</span>
           <span style={{ color: 'var(--muted)' }}>
-            Room loaded · {fileName(splat.url)} · {objects.ready} objects
+            Room loaded · {fileName(splat.url)}
+            {collider.data ? ` · ${collider.data.triangleCount} collider tris` : ''}
           </span>
         </div>
       ) : (

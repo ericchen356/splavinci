@@ -20,7 +20,7 @@ import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
 import { ScrubBar } from '@/components/review/ScrubBar';
 import { useRoomAssets } from '@/lib/scene';
-import { getWalkGrid, sampleAtTime, segmentAtTime, toShotObjects } from '@/lib/path';
+import { getWalkGrid, sampleAtTime, segmentAtTime } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { useReviewStore } from '@/lib/review/reviewStore';
 import { CanvasRecorder, isRecordingSupported } from '@/lib/review/recorder';
@@ -48,8 +48,6 @@ export default function ReviewPage() {
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
     [assets.colliderData],
   );
-  const objects = useMemo(() => toShotObjects(assets.loadedObjects), [assets.loadedObjects]);
-
   // Only ever seen before a path exists - PlaybackCamera owns the camera after
   // that - but "before" is most of the time on a first visit, so it is framed
   // from the collider rather than from numbers that fit the sample flat.
@@ -145,9 +143,9 @@ export default function ReviewPage() {
       updateWaypoint(editing.id, patch);
       // Marking the waypoint pinned scopes the rebuild to the legs touching it;
       // the rest of the frame table is served from cache.
-      generate(assets.colliderData, objects);
+      generate(assets.colliderData);
     },
-    [editing, updateWaypoint, generate, assets.colliderData, objects],
+    [editing, updateWaypoint, generate, assets.colliderData],
   );
 
   const hasPath = frames.length > 0;
@@ -270,7 +268,6 @@ export default function ReviewPage() {
           polyline={path?.polyline ?? []}
           camera={pose ? { position: pose.position, lookAt: pose.lookAt } : null}
           comments={comments}
-          objects={assets.manifest}
           onPick={onMapClick}
           onWaypointPick={(id) => editWaypoint(id)}
           onCommentPick={(id) => {
@@ -317,7 +314,7 @@ export default function ReviewPage() {
               waypoint={editing}
               index={editingIndex}
               total={waypoints.length}
-              objects={objects}
+              grid={grid}
               style={settings.style}
               onChange={applyEdit}
               onClose={() => editWaypoint(null)}

@@ -12,7 +12,6 @@
  */
 
 import { create } from 'zustand';
-import type { SceneObject } from '@/lib/types';
 import {
   getActiveAssetSetId,
   getActiveQualityId,
@@ -21,20 +20,9 @@ import {
   type AssetSet,
   getAssetSet,
 } from '@/lib/assets';
-import type {
-  ColliderState,
-  LoadedObject,
-  ObjectsState,
-  SplatState,
-} from './assetTypes';
+import type { ColliderState, SplatState } from './assetTypes';
 import { createFloorSampler, type FloorSampler } from './floor';
-import {
-  describeError,
-  loadCollider,
-  loadObjectManifest,
-  loadSceneObjects,
-  resolveSplatSource,
-} from './loaders';
+import { describeError, loadCollider, resolveSplatSource } from './loaders';
 
 const INITIAL_SPLAT: SplatState = {
   phase: 'idle',
@@ -53,17 +41,6 @@ const INITIAL_COLLIDER: ColliderState = {
   data: null,
 };
 
-const INITIAL_OBJECTS: ObjectsState = {
-  phase: 'idle',
-  progress: 0,
-  error: null,
-  manifest: [],
-  loaded: [],
-  byId: {},
-  total: 0,
-  ready: 0,
-};
-
 export type RoomStore = {
   /** Which capture is loaded. Changing it reloads every asset. */
   assetSetId: string;
@@ -73,7 +50,6 @@ export type RoomStore = {
   qualityId: string | null;
   splat: SplatState;
   collider: ColliderState;
-  objects: ObjectsState;
   /** Rebuilt whenever the collider changes; never null after the collider lands. */
   floor: FloorSampler;
   /** Debug wireframe toggle for the otherwise-invisible collider. */
@@ -84,13 +60,13 @@ export type RoomStore = {
   setShowCollider(value: boolean, fromUser?: boolean): void;
   toggleCollider(): void;
 
-  /** Idempotent. Kicks off collider + manifest + object meshes exactly once. */
+  /** Idempotent. Kicks off the collider load exactly once. */
   loadRoom(): Promise<void>;
   /** Drop everything and load again (dev affordance / retry button). */
   reloadRoom(): Promise<void>;
   /** Switch capture and reload. No-op when already active. */
   switchAssetSet(id: string): Promise<void>;
-  /** Switch density. Only the splat reloads - collider and objects are shared. */
+  /** Switch density. Only the splat reloads - the collider is shared. */
   switchQuality(id: string): Promise<void>;
 
   /* Splat status is pushed in by the R3F layer, which owns the Spark objects. */
@@ -106,7 +82,6 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
   qualityId: getActiveQualityId(),
   splat: INITIAL_SPLAT,
   collider: INITIAL_COLLIDER,
-  objects: INITIAL_OBJECTS,
   floor: createFloorSampler(null),
   showCollider: false,
   colliderToggleTouched: false,
@@ -136,10 +111,10 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
 
   async switchQuality(id) {
     if (!setActiveQuality(id)) return;
-    // Only the splat changes. The collider and manifest describe the same
-    // scene at any density, so reloading them would just re-download and
-    // re-parse identical bytes - and would throw away the parsed collider the
-    // path generator's grid cache is keyed on.
+    // Only the splat changes. The collider describes the same scene at any
+    // density, so reloading it would just re-download and re-parse identical
+    // bytes - and would throw away the parsed collider the path generator's
+    // grid cache is keyed on.
     splatResolution = null;
     set({ qualityId: getActiveQualityId(), splat: INITIAL_SPLAT });
   },
@@ -148,7 +123,6 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
     roomLoad = null;
     set({
       collider: INITIAL_COLLIDER,
-      objects: INITIAL_OBJECTS,
       splat: INITIAL_SPLAT,
       floor: createFloorSampler(null),
     });
@@ -211,7 +185,7 @@ type SetFn = (
 ) => void;
 
 async function runRoomLoad(set: SetFn): Promise<void> {
-  await Promise.all([loadColliderInto(set), loadObjectsInto(set)]);
+  await loadColliderInto(set);
 }
 
 async function loadColliderInto(set: SetFn): Promise<void> {
@@ -232,55 +206,11 @@ async function loadColliderInto(set: SetFn): Promise<void> {
   }
 }
 
-async function loadObjectsInto(set: SetFn): Promise<void> {
-  set({ objects: { ...INITIAL_OBJECTS, phase: 'loading' } });
-
-  let manifest: SceneObject[];
-  try {
-    manifest = await loadObjectManifest();
-  } catch (err) {
-    set({ objects: { ...INITIAL_OBJECTS, phase: 'failed', error: describeError(err) } });
-    return;
-  }
-
-  set((s) => ({
-    objects: { ...s.objects, manifest, total: manifest.length, progress: 0 },
-  }));
-
-  const failures: string[] = [];
-  const loaded = await loadSceneObjects(manifest, {
-    onOne: () =>
-      set((s) => {
-        const ready = s.objects.ready + 1;
-        const total = s.objects.total || 1;
-        return { objects: { ...s.objects, ready, progress: ready / total } };
-      }),
-    onError: (spec, message) => failures.push(`${spec.id}: ${message}`),
-  });
-
-  const byId: Record<string, LoadedObject> = {};
-  for (const item of loaded) byId[item.spec.id] = item;
-
-  const allFailed = manifest.length > 0 && loaded.length === 0;
-  set((s) => ({
-    objects: {
-      ...s.objects,
-      phase: allFailed ? 'failed' : 'loaded',
-      progress: 1,
-      // Partial failures are surfaced but do not blank the room.
-      error: failures.length > 0 ? failures.join('; ') : null,
-      loaded,
-      byId,
-      ready: loaded.length,
-    },
-  }));
-}
-
 /* ------------------------------ non-React API ----------------------------- */
 
 /**
- * Await the collider + object meshes from outside React (path generator,
- * workers, tests). Resolves once both have settled, loaded or failed.
+ * Await the collider from outside React (path generator, workers, tests).
+ * Resolves once it has settled, loaded or failed.
  */
 export async function ensureRoomLoaded(): Promise<RoomStore> {
   await useRoomStore.getState().loadRoom();

@@ -25,7 +25,7 @@ export type ShotContext = {
   tangent: THREE.Vector3;
   /** 0..1 move amplitude. */
   intensity: number;
-  /** True when `target` is a real object rather than the anchor itself. */
+  /** True when `target` is a real point to frame rather than the anchor itself. */
   hasTarget: boolean;
 };
 

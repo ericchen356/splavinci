@@ -22,8 +22,6 @@ export {
   type AssetPhase,
   type AssetState,
   type ColliderState,
-  type LoadedObject,
-  type ObjectsState,
   type SplatSourceKind,
   type SplatState,
 } from './assetTypes';
@@ -31,9 +29,6 @@ export {
 export {
   describeError,
   loadCollider,
-  loadObjectManifest,
-  loadSceneObject,
-  loadSceneObjects,
   resolveSplatSource,
   type ProgressFn,
   type SplatResolution,

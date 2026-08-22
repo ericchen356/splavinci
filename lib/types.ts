@@ -30,12 +30,14 @@ export const SHOT_TYPES: readonly ShotType[] = [
   'hold',
 ] as const;
 
-/** A stop the camera visits, in list order. */
+/** A stop the camera visits, in list order.
+ *
+ *  `position` is the raw 3D point the user clicked on the splat - there are no
+ *  individually meshed objects to reference, so what a waypoint frames is
+ *  derived from the room's own geometry (see lib/path/shots.ts). */
 export type Waypoint = {
   id: string;
   position: Vec3;
-  /** Object the shot is framed on, or null to let the generator pick. */
-  targetObjectId: string | null;
   shotType: ShotType;
   /** 0 = fully auto (infer everything), 1 = fully manual (obey the user).
    *  Values in between blend the two rather than snapping to either end. */
@@ -80,7 +82,12 @@ export const PATH_STYLES: readonly PathStyle[] = [
   'quick',
 ] as const;
 
-/** One entry of objects.json — an individually meshed object in the room. */
+/** One entry of objects.json — an individually meshed object in the room.
+ *
+ *  NO LONGER LOADED. Captures do not ship a per-object manifest any more: a
+ *  waypoint targets a raw point on the splat and the shot is inferred from the
+ *  collider's walls instead (lib/path/shots.ts). Kept only as the shape of the
+ *  legacy file for anything still reading one off disk. */
 export type SceneObject = {
   id: string;
   meshUrl: string;

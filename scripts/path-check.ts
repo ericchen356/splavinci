@@ -3,32 +3,18 @@
  *
  *   npx tsx scripts/path-check.ts
  *
- * Exercises the whole chain against the real collider and manifest: grid,
- * A*, smoothing, shot inference, incremental recompute, and the ambiguous
- * cases that must warn rather than fail silently.
+ * Exercises the whole chain against the real collider: grid, A*, smoothing,
+ * wall-distance shot inference, incremental recompute, and the ambiguous cases
+ * that must warn rather than fail silently.
  */
-import { readFileSync } from 'node:fs';
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { loadColliderFromDisk } from './path-lab';
-import { generatePath, createPathCache, type ShotObject } from '@/lib/path';
-import type { PathSettings, SceneObject, Vec3, Waypoint } from '@/lib/types';
+import { generatePath, createPathCache, getWalkGrid, readWall, roomShape } from '@/lib/path';
+import type { PathSettings, Vec3, Waypoint } from '@/lib/types';
 
 const collider = await loadColliderFromDisk('public/sample-room/collider.glb');
-const manifest: SceneObject[] = JSON.parse(readFileSync('public/sample-room/objects.json', 'utf8'));
-const loader = new GLTFLoader();
-const objects: ShotObject[] = [];
-for (const spec of manifest) {
-  const buf = readFileSync('public' + spec.meshUrl);
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-  const gltf = await new Promise<any>((res, rej) => loader.parse(ab, '', res, rej));
-  const size = new THREE.Vector3();
-  new THREE.Box3().setFromObject(gltf.scene).getSize(size);
-  objects.push({ id: spec.id, position: spec.position, label: spec.label, size: [size.x, size.y, size.z] as Vec3 });
-}
 
 const wp = (id: string, x: number, z: number, extra: Partial<Waypoint> = {}): Waypoint => ({
-  id, position: [x, 0, z], targetObjectId: null, shotType: 'orbit',
+  id, position: [x, 0, z], shotType: 'orbit',
   controlSpectrum: 0, duration: 4, pinned: false, ...extra,
 });
 
@@ -42,7 +28,7 @@ const waypoints: Waypoint[] = [
 const settings: PathSettings = { style: 'realEstate' };
 const cache = createPathCache();
 
-const r = generatePath({ collider, waypoints, settings, objects }, cache);
+const r = generatePath({ collider, waypoints, settings }, cache);
 console.log(`frames ${r.frames.length}  duration ${r.duration}s  fps ${r.fps}`);
 console.log(`grid ${r.stats.gridCols}x${r.stats.gridRows} @ ${r.stats.cellSize.toFixed(4)}m  ` +
             `gridMs ${r.stats.gridMs}  generateMs ${r.stats.generateMs}`);
@@ -61,34 +47,58 @@ console.log(`\nmonotonic timeSeconds: ${bad === 0 ? 'OK' : bad + ' REGRESSIONS'}
 const ids = new Set(r.frames.map(f => f.activeWaypointId));
 console.log('activeWaypointIds present:', [...ids].join(', '));
 
+// FrameEntry contract: exactly { timeSeconds, position, lookAt, activeWaypointId }.
+const FRAME_KEYS = ['timeSeconds', 'position', 'lookAt', 'activeWaypointId'].join(',');
+const frameKeys = Object.keys(r.frames[0]).sort().join(',');
+console.log(`FrameEntry keys: ${frameKeys} ` +
+            `(${frameKeys === FRAME_KEYS.split(',').sort().join(',') ? 'OK' : 'CHANGED'})`);
+
+/* ---------------- wall-distance inference ---------------- */
+console.log('\n=== wall-distance rule ===');
+const grid = getWalkGrid(collider);
+const shape = roomShape(grid);
+console.log(`median clearance ${shape.medianClearance.toFixed(2)}m (openness 0.5)  ` +
+            `centre (${shape.centre[0].toFixed(2)}, ${shape.centre[2].toFixed(2)})  ` +
+            `dense bounds x ${shape.bounds.min.x.toFixed(1)}..${shape.bounds.max.x.toFixed(1)} ` +
+            `z ${shape.bounds.min.z.toFixed(1)}..${shape.bounds.max.z.toFixed(1)}`);
+for (const w of waypoints) {
+  const reading = readWall(grid, w.position);
+  const dir = reading.toWall
+    ? `(${reading.toWall[0].toFixed(2)}, ${reading.toWall[2].toFixed(2)})`
+    : 'undecidable';
+  const shot = r.shots.find((s) => s.waypointId === w.id)!;
+  console.log(`  ${w.id}  wall ${reading.clearance.toFixed(2)}m  ` +
+              `openness ${reading.openness.toFixed(2)}  toWall ${dir.padEnd(16)} -> ${shot.shotType}`);
+}
+
 /* ---------------- incremental recompute ---------------- */
 console.log('\n=== incremental recompute ===');
-const r2 = generatePath({ collider, waypoints, settings, objects }, cache);
+const r2 = generatePath({ collider, waypoints, settings }, cache);
 console.log(`regenerate, nothing changed : recomputed ${r2.stats.recomputedSegments}  reused ${r2.stats.reusedSegments}  (${r2.stats.generateMs}ms)`);
 
 const moved = waypoints.map((w) =>
   w.id === 'w3' ? { ...w, position: [2.4, 0, 6.4] as Vec3, pinned: true } : w);
-const r3 = generatePath({ collider, waypoints: moved, settings, objects }, cache);
+const r3 = generatePath({ collider, waypoints: moved, settings }, cache);
 console.log(`drag w3 (pinned)            : recomputed ${r3.stats.recomputedSegments}  reused ${r3.stats.reusedSegments}  (${r3.stats.generateMs}ms)`);
 console.log('  recomputed legs:', r3.segments.filter(s => s.kind === 'travel' && !s.reused).map(s => s.id).join(', ') || '(none)');
 console.log('  reused legs    :', r3.segments.filter(s => s.kind === 'travel' && s.reused).map(s => s.id).join(', ') || '(none)');
 
 const unpinned = moved.map((w) => ({ ...w, pinned: false }));
-const r4 = generatePath({ collider, waypoints: unpinned, settings, objects }, cache);
+const r4 = generatePath({ collider, waypoints: unpinned, settings }, cache);
 console.log(`same again, unpinned        : recomputed ${r4.stats.recomputedSegments}  reused ${r4.stats.reusedSegments}  (${r4.stats.generateMs}ms)`);
 
-const restyled = generatePath({ collider, waypoints: unpinned, settings: { style: 'cinematic' }, objects }, cache);
+const restyled = generatePath({ collider, waypoints: unpinned, settings: { style: 'cinematic' } }, cache);
 console.log(`change style to cinematic   : recomputed ${restyled.stats.recomputedSegments}  reused ${restyled.stats.reusedSegments}  duration ${restyled.duration}s`);
 
 /* ---------------- unreachable ---------------- */
 console.log('\n=== ambiguous cases ===');
 const sealed: Waypoint[] = [wp('a', 3.0, 2.2), wp('b', 0.1, 0.1)];
-const rs = generatePath({ collider, waypoints: sealed, settings, objects }, createPathCache());
+const rs = generatePath({ collider, waypoints: sealed, settings }, createPathCache());
 for (const w of rs.warnings) console.log(`  [${w.severity}] ${w.code}: ${w.message}`);
 console.log(`  still produced ${rs.frames.length} frames, ${rs.duration}s (coherent timeline, flagged)`);
 
-const single = generatePath({ collider, waypoints: [wp('only', 3, 2.2)], settings, objects }, createPathCache());
+const single = generatePath({ collider, waypoints: [wp('only', 3, 2.2)], settings }, createPathCache());
 for (const w of single.warnings) console.log(`  [${w.severity}] ${w.code}: ${w.message}`);
 
-const none = generatePath({ collider, waypoints: [], settings, objects }, createPathCache());
+const none = generatePath({ collider, waypoints: [], settings }, createPathCache());
 for (const w of none.warnings) console.log(`  [${w.severity}] ${w.code}: ${w.message}`);

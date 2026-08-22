@@ -3,7 +3,7 @@
  *
  * COORDINATE NOTE — read before dropping in a real capture.
  * The checked-in fixture (public/sample-room/room.ply) is authored in the SAME
- * right-handed Y-up world as collider.glb and objects.json: floor at y = 0,
+ * right-handed Y-up world as collider.glb: floor at y = 0,
  * x in [0,10], z in [0,8]. So the default transform below is identity.
  *
  * A real INRIA / Nerfstudio 3DGS capture is normally Y-DOWN. Spark applies no

@@ -23,7 +23,6 @@ import {
   generatePath,
   type PathCache,
   type PathResult,
-  type ShotObject,
 } from '@/lib/path';
 
 /** Non-reactive: holds live THREE curves between generations. */
@@ -40,7 +39,6 @@ export function makeWaypoint(position: Vec3): Waypoint {
   return {
     id: nextWaypointId(),
     position,
-    targetObjectId: null,
     shotType: 'orbit',
     controlSpectrum: 0,
     duration: 4,
@@ -67,7 +65,7 @@ export type PlanStore = {
   select(id: string | null): void;
   setStyle(style: PathStyle): void;
 
-  generate(collider: ColliderData | null, objects: readonly ShotObject[]): void;
+  generate(collider: ColliderData | null): void;
 
   /* comments live here too so the review screen and the mini-map share one list */
   comments: Comment[];
@@ -141,11 +139,11 @@ export const usePlanStore = create<PlanStore>((set, get) => ({
     set((s) => ({ settings: { ...s.settings, style }, dirty: true }));
   },
 
-  generate(collider, objects) {
+  generate(collider) {
     const { waypoints, settings } = get();
     set({ generating: true });
     try {
-      const path = generatePath({ collider, waypoints, settings, objects }, pathCache);
+      const path = generatePath({ collider, waypoints, settings }, pathCache);
       // Generation consumes the pins: they have done their job of scoping the
       // recompute, and leaving them set would force the same legs to rebuild
       // on every subsequent generate.

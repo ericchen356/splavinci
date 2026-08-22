@@ -12,15 +12,10 @@
 
 import { useEffect, useMemo } from 'react';
 import type * as THREE from 'three';
-import type { SceneObject, Vec3 } from '@/lib/types';
+import type { Vec3 } from '@/lib/types';
 import { readSavedAssetSetId, type AssetSet } from '@/lib/assets';
 import type { ColliderData } from './collider';
-import type {
-  ColliderState,
-  LoadedObject,
-  ObjectsState,
-  SplatState,
-} from './assetTypes';
+import type { ColliderState, SplatState } from './assetTypes';
 import type { FloorSampler } from './floor';
 import { useRoomStore } from './roomStore';
 
@@ -35,17 +30,10 @@ export type RoomAssets = {
   /* --- raw per-asset state, for honest status UI --- */
   splat: SplatState;
   collider: ColliderState;
-  objects: ObjectsState;
 
   /* --- the useful parsed payloads --- */
   /** Parsed collider: meshes, world-space triangle soup, bounds. Null until loaded. */
   colliderData: ColliderData | null;
-  /** objects.json verbatim (available before the meshes finish downloading). */
-  manifest: SceneObject[];
-  /** Manifest entries whose mesh parsed, with bounds/centre/radius. */
-  loadedObjects: LoadedObject[];
-  /** Lookup by SceneObject.id. */
-  getObject(id: string | null | undefined): LoadedObject | null;
 
   /* --- floor queries --- */
   /** Always present; `floor.ready` is false until the collider lands. */
@@ -93,7 +81,6 @@ export function useRoomAssets(): RoomAssets {
   const switchQuality = useRoomStore((s) => s.switchQuality);
   const splat = useRoomStore((s) => s.splat);
   const collider = useRoomStore((s) => s.collider);
-  const objects = useRoomStore((s) => s.objects);
   const floor = useRoomStore((s) => s.floor);
   const showCollider = useRoomStore((s) => s.showCollider);
   const loadRoom = useRoomStore((s) => s.loadRoom);
@@ -122,10 +109,10 @@ export function useRoomAssets(): RoomAssets {
       ? [(bounds.min.x + bounds.max.x) / 2, floor.baseY, (bounds.min.z + bounds.max.z) / 2]
       : null;
 
-    const phases = [splat.phase, collider.phase, objects.phase];
-    const progress = [splat, collider, objects]
+    const phases = [splat.phase, collider.phase];
+    const progress = [splat, collider]
       .map((a) => (a.phase === 'loaded' ? 1 : a.progress < 0 ? 0.5 : Math.max(0, a.progress)))
-      .reduce((a, b) => a + b, 0) / 3;
+      .reduce((a, b) => a + b, 0) / phases.length;
 
     return {
       assetSetId,
@@ -136,11 +123,7 @@ export function useRoomAssets(): RoomAssets {
 
       splat,
       collider,
-      objects,
       colliderData: collider.data,
-      manifest: objects.manifest,
-      loadedObjects: objects.loaded,
-      getObject: (id) => (id ? (objects.byId[id] ?? null) : null),
 
       floor,
       floorYAt: (x, z) => floor.floorYAt(x, z),
@@ -166,7 +149,6 @@ export function useRoomAssets(): RoomAssets {
     switchQuality,
     splat,
     collider,
-    objects,
     floor,
     showCollider,
     setShowColliderRaw,

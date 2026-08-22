@@ -4,12 +4,10 @@
  * plain async function (the path generator does exactly that).
  */
 
-import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { ASSETS } from '@/lib/assets';
-import type { SceneObject, Vec3 } from '@/lib/types';
 import { buildColliderData, type ColliderData } from './collider';
-import type { LoadedObject, SplatSourceKind } from './assetTypes';
+import type { SplatSourceKind } from './assetTypes';
 
 let sharedGltfLoader: GLTFLoader | null = null;
 
@@ -88,71 +86,4 @@ export async function loadCollider(
 ): Promise<ColliderData> {
   const gltf = await gltfLoader().loadAsync(url, (e) => onProgress?.(progressFraction(e)));
   return buildColliderData(gltf.scene);
-}
-
-/* --------------------------------- objects -------------------------------- */
-
-export async function loadObjectManifest(url: string = ASSETS.objects): Promise<SceneObject[]> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
-  const json: unknown = await res.json();
-  if (!Array.isArray(json)) throw new Error(`${url} is not an array`);
-  return json as SceneObject[];
-}
-
-/**
- * Load one manifest entry's mesh and place it at its manifest position.
- *
- * Every mesh in public/sample-room/meshes is authored centred on its own
- * origin and the manifest position is the world-space centre, so the placement
- * is a straight assignment with no offset correction.
- */
-export async function loadSceneObject(spec: SceneObject): Promise<LoadedObject> {
-  const gltf = await gltfLoader().loadAsync(spec.meshUrl);
-  const root = gltf.scene;
-  root.name = spec.id;
-  root.position.set(spec.position[0], spec.position[1], spec.position[2]);
-  root.updateMatrixWorld(true);
-
-  const bounds = new THREE.Box3().setFromObject(root);
-  const center = new THREE.Vector3();
-  const size = new THREE.Vector3();
-  bounds.getCenter(center);
-  bounds.getSize(size);
-
-  return {
-    spec,
-    root,
-    bounds,
-    center: [center.x, center.y, center.z] as Vec3,
-    size: [size.x, size.y, size.z] as Vec3,
-    radius: size.length() / 2,
-  };
-}
-
-/**
- * Load every mesh in the manifest. Individual failures are reported through
- * `onError` and skipped rather than sinking the whole batch — one bad mesh
- * should not blank the room.
- */
-export async function loadSceneObjects(
-  manifest: SceneObject[],
-  hooks?: {
-    onOne?: (loaded: LoadedObject, index: number) => void;
-    onError?: (spec: SceneObject, message: string) => void;
-  },
-): Promise<LoadedObject[]> {
-  const settled = await Promise.all(
-    manifest.map(async (spec, i) => {
-      try {
-        const loaded = await loadSceneObject(spec);
-        hooks?.onOne?.(loaded, i);
-        return loaded;
-      } catch (err) {
-        hooks?.onError?.(spec, describeError(err));
-        return null;
-      }
-    }),
-  );
-  return settled.filter((x): x is LoadedObject => x !== null);
 }

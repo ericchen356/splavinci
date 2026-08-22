@@ -31,10 +31,7 @@ export default function ScenePage() {
   const [mode, setMode] = useState<CameraMode>('orbit');
   const [presetId, setPresetId] = useState('interior');
   const [presetNonce, setPresetNonce] = useState(0);
-  const [showObjects, setShowObjects] = useState(true);
   const [showSplat, setShowSplat] = useState(true);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
   const [probe, setProbe] = useState<{ point: Vec3; floorY: number | null } | null>(null);
 
   // Framed from where the capture actually has data, so any scene gets usable
@@ -56,17 +53,10 @@ export default function ScenePage() {
     if (assets.roomBounds) setPresetNonce((n) => n + 1);
   }, [assets.roomBounds, assets.assetSetId]);
 
-  const highlighted = useMemo(
-    () => [hovered, selected].filter((x): x is string => Boolean(x)),
-    [hovered, selected],
-  );
-
   const applyPreset = (next: CameraPreset) => {
     setPresetId(next.id);
     setPresetNonce((n) => n + 1);
   };
-
-  const selectedObject = assets.getObject(selected);
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
@@ -83,13 +73,6 @@ export default function ScenePage() {
 
         <RoomScene
           showSplat={showSplat}
-          showObjects={showObjects}
-          interactiveObjects
-          highlightedObjectIds={highlighted}
-          onObjectClick={(object) =>
-            setSelected((current) => (current === object.spec.id ? null : object.spec.id))
-          }
-          onObjectHover={(object) => setHovered(object ? object.spec.id : null)}
           onFloorClick={(point) =>
             setProbe({ point, floorY: assets.floorYAt(point[0], point[2]) })
           }
@@ -158,57 +141,12 @@ export default function ScenePage() {
 
         <Panel title="Layers">
           <Checkbox label="Splat cloud" checked={showSplat} onChange={setShowSplat} />
-          <Checkbox label="Object meshes" checked={showObjects} onChange={setShowObjects} />
           <Checkbox
             label="Collider wireframe"
             checked={assets.showCollider}
             onChange={assets.setShowCollider}
           />
         </Panel>
-
-        <Panel title={`Objects (${assets.loadedObjects.length})`}>
-          <div style={{ maxHeight: 240, overflowY: 'auto', margin: '0 -4px' }}>
-            {assets.loadedObjects.map((object) => {
-              const active = object.spec.id === selected;
-              return (
-                <button
-                  key={object.spec.id}
-                  type="button"
-                  onMouseEnter={() => setHovered(object.spec.id)}
-                  onMouseLeave={() => setHovered(null)}
-                  onClick={() => setSelected(active ? null : object.spec.id)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    background: active ? 'var(--accent-dim)' : 'transparent',
-                    border: 'none',
-                    borderRadius: 6,
-                    padding: '4px 8px',
-                    fontSize: 12,
-                    color: active ? 'var(--text)' : 'var(--muted)',
-                  }}
-                >
-                  {object.spec.label}
-                </button>
-              );
-            })}
-            {assets.loadedObjects.length === 0 ? (
-              <div style={{ padding: '4px 8px', color: 'var(--muted)', fontSize: 12 }}>
-                {assets.objects.phase === 'failed' ? 'Failed to load.' : 'Loading…'}
-              </div>
-            ) : null}
-          </div>
-        </Panel>
-
-        {selectedObject ? (
-          <Panel title={selectedObject.spec.label}>
-            <Row k="id" v={selectedObject.spec.id} />
-            <Row k="centre" v={fmtVec(selectedObject.center)} />
-            <Row k="size" v={fmtVec(selectedObject.size)} />
-            <Row k="radius" v={selectedObject.radius.toFixed(2)} />
-          </Panel>
-        ) : null}
 
         <Panel title="Floor probe">
           {probe ? (

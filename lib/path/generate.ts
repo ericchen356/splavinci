@@ -38,7 +38,7 @@ import { getWalkGrid } from './gridCache';
 import { findPath, simplifyPath, type Cell } from './astar';
 import { buildCurve, easeInOut, DEFAULT_CURVE } from './curve';
 import { sampleShot, vec3, type ShotContext } from './motion';
-import { resolveShot, STYLE_PRESETS, type ShotIntent, type ShotObject } from './shots';
+import { resolveShot, STYLE_PRESETS, type ShotIntent } from './shots';
 import {
   EMPTY_PATH,
   type PathResult,
@@ -66,7 +66,6 @@ export type PathInput = {
   collider: ColliderData | null;
   waypoints: readonly Waypoint[];
   settings: PathSettings;
-  objects: readonly ShotObject[];
   options?: Partial<GenerateOptions>;
 };
 
@@ -98,7 +97,6 @@ function waypointKey(w: Waypoint): string {
   return [
     w.id,
     w.position.map((v) => round(v)).join(','),
-    w.targetObjectId ?? '-',
     w.shotType,
     round(w.controlSpectrum),
     round(w.duration, 2),
@@ -155,7 +153,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   /* ---- resolve every shot up front; travel timing depends on it ---- */
   const preset = STYLE_PRESETS[input.settings.style];
   const shots: ShotIntent[] = waypoints.map((w) =>
-    resolveShot(w, input.objects, input.settings.style),
+    resolveShot(w, grid, input.settings.style),
   );
 
   if (waypoints.length === 1) {
@@ -259,7 +257,9 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     const baseCtx: ShotContext = {
       anchor, target, tangent: tangents[i],
       intensity: shot.intensity,
-      hasTarget: shot.targetObjectId !== null,
+      // A waypoint whose target resolved to its own column has nothing to
+      // frame; the shot falls back to its direction of travel.
+      hasTarget: shot.targetDistance > 1e-6,
     };
 
     const validated = fitShotToRoom(grid, shot.shotType, baseCtx, opts.radius);

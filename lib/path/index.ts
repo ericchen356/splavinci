@@ -28,9 +28,9 @@ export {
 } from './curve';
 
 export {
-  resolveShot, inferShotType, inferDuration, nearestObject, toShotObjects,
-  STYLE_PRESETS, MAX_TARGET_DISTANCE, SHOT_TYPE_CROSSOVER,
-  type ShotIntent, type ShotObject, type StylePreset,
+  resolveShot, inferShotType, inferDuration, readWall, roomShape,
+  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER, SHOT_TYPE_CROSSOVER,
+  type ShotIntent, type RoomShape, type StylePreset, type WallReading,
 } from './shots';
 
 export { sampleShot, sampleShotEased, type ShotContext, type CameraSample } from './motion';
