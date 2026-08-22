@@ -47,7 +47,12 @@ export type { Logger, MarbleClientOptions, WaitOptions } from './client';
 export { MarbleError, isMarbleError } from './errors';
 export type { MarbleErrorKind } from './errors';
 
-export { DEFAULT_ANCHOR, composeIntake } from './intake';
+export {
+  COHERENCE_CLAUSE,
+  DEFAULT_ANCHOR,
+  INSPIRATION_CLAUSE,
+  composeIntake,
+} from './intake';
 export type {
   BlueprintInput,
   BlueprintReader,

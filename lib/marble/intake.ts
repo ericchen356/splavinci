@@ -56,6 +56,15 @@ export type IntakeInput = {
   photos: string[];
   /** Free text. An array is joined with commas before composing. */
   keywords: string | string[];
+  /**
+   * How big the finished interior should be, in metres.
+   *
+   * Buried in the keyword list this was ignored - birch-row asked for a 43 m2
+   * flat with a 2.45 m ceiling and came back 8.4 x 12.0 m with a 3.5 m ceiling,
+   * more than twice its floor area. As its own sentence it is an instruction
+   * rather than an adjective.
+   */
+  envelope?: { widthM: number; depthM: number; ceilingM: number };
 };
 
 export type IntakeOptions = {
@@ -73,6 +82,32 @@ export type IntakeOptions = {
   anchor?: string | null;
   /** Base for relative paths. Defaults to the process working directory. */
   cwd?: string;
+  /**
+   * What the photographs ARE, as far as Marble is concerned.
+   *
+   * 'inspiration' (the default) sends ONE photo and describes the rest in
+   * words. 'views' sends them all as multi-image content.
+   *
+   * This is the single most consequential setting in the pipeline, and the
+   * default changed because of what 'views' produced. Marble's multi-image
+   * prompt is a SPHERICAL structure - each entry is `{ content, azimuth }`,
+   * a thing you would see looking in a given direction from one spot. Handing
+   * it photographs of four different real flats therefore asserts that a
+   * kitchen, a hall, a living room and a window corner are four directions of
+   * the same room, and Marble's only way to satisfy that is to build a space
+   * containing all four. That is where the collaged geometry came from: walls
+   * that stop before the ceiling are the seam between two views that cannot
+   * both be true, and the reason a world looks right from some angles and
+   * wrong from others is that the photos pinned those angles and everything
+   * between them was extrapolated.
+   *
+   * Every image supplied REMOVES imagination and adds a constraint. One
+   * anchor view plus a careful description leaves Marble free to invent a
+   * coherent room; four views leave it reconciling a contradiction.
+   *
+   * Use 'views' only for photographs genuinely taken in one real space.
+   */
+  photoRole?: 'inspiration' | 'views';
 };
 
 /** The stage's output, exactly as environment-builder consumes it. */
@@ -80,6 +115,12 @@ export type IntakeResult = {
   composedPrompt: string;
   /** Absolute paths, in caller order, unmodified on disk. */
   images: string[];
+  /**
+   * Photos deliberately NOT sent, under 'inspiration'. Recorded rather than
+   * dropped silently: someone reading scene.json has to be able to tell the
+   * difference between a photo that was ignored and one that was never given.
+   */
+  omittedPhotos: string[];
 };
 
 /** Provenance for scene.json and for `--dry-run`. Not part of the contract. */
@@ -91,6 +132,31 @@ export type IntakeDetail = IntakeResult & {
 
 export const DEFAULT_ANCHOR =
   'Interior of a home, photographed at standing eye level';
+
+/**
+ * What "a building" means, spelled out.
+ *
+ * Marble is not told to produce an enclosed volume, and left to itself it will
+ * produce whatever satisfies the views it was given - which is how a wall that
+ * meets no ceiling gets built. Naming the invariants costs one sentence.
+ */
+export const COHERENCE_CLAUSE =
+  'This is one continuous enclosed interior: every wall runs from the floor to ' +
+  'the ceiling, the ceiling covers the whole space, the floor is level and ' +
+  'unbroken, and there are no open sides, freestanding wall fragments or gaps ' +
+  'through to the outside except windows and doorways';
+
+/**
+ * The sentence that makes the photographs reference rather than source.
+ *
+ * Without it Marble treats a supplied interior as a thing to reproduce, and
+ * the result is a copy of somebody else's flat wearing the requested layout
+ * badly. The photographs are here for material, colour and light.
+ */
+export const INSPIRATION_CLAUSE =
+  'Use the photograph only as a guide to materials, colour palette and quality ' +
+  'of light; do not reproduce its room, its proportions or its furniture ' +
+  'arrangement — build the layout described above instead';
 
 /** Trim, collapse runs of whitespace, drop a trailing sentence terminator. */
 function clean(text: string): string {
@@ -216,20 +282,47 @@ export async function composeIntake(
     ? input.keywords.map(clean).filter(Boolean).join(', ')
     : clean(input.keywords);
 
-  const images = await resolvePhotos(input.photos, cwd);
+  const resolved = await resolvePhotos(input.photos, cwd);
+
+  /* One anchor image, not a set. See IntakeOptions.photoRole for why this is
+     the default and what the alternative actually asks Marble to do. */
+  const role = options.photoRole ?? 'inspiration';
+  const images = role === 'inspiration' ? resolved.slice(0, 1) : resolved;
+  const omittedPhotos = role === 'inspiration' ? resolved.slice(1) : [];
+
+  const envelope = input.envelope
+    ? `The whole interior fits within about ${fmt(input.envelope.widthM)} by ` +
+      `${fmt(input.envelope.depthM)} metres with a ` +
+      `${fmt(input.envelope.ceilingM)} metre ceiling`
+    : null;
 
   const anchor = options.anchor === undefined ? DEFAULT_ANCHOR : options.anchor;
   const composedPrompt = joinSentences([
     anchor,
+    COHERENCE_CLAUSE,
     `The layout is ${clean(described).replace(/^the layout is\s+/i, '')}`,
+    envelope,
     keywords,
+    images.length > 0 ? INSPIRATION_CLAUSE : null,
   ]);
 
   return {
     composedPrompt,
     images,
+    omittedPhotos,
     blueprintPath,
     layoutDescription: clean(described),
     keywords,
   };
+}
+
+/**
+ * Metres, at the precision the number actually carries.
+ *
+ * toFixed(1) turned a 2.45 m ceiling into "2.5" while the keyword list two
+ * sentences earlier still said 2.45 - a contradiction inside a prompt whose
+ * whole purpose is to stop Marble improvising the dimensions.
+ */
+function fmt(m: number): string {
+  return String(Number(m.toFixed(2)));
 }

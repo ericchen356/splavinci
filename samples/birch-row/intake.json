@@ -1,0 +1,42 @@
+{
+  "id": "birch-row",
+  "name": "Birch Row",
+  "description": "Compact one-bedroom flat where every room opens off one small entrance hall.",
+  "blueprint": {
+    "path": "blueprint.png",
+    "layoutDescription": "a compact one-bedroom flat in which every room opens off one small entrance hall: the front door leads into the hall, a wide opening on its left gives onto a galley kitchen, a door ahead opens into the living room, a second door leads to the bedroom behind it, and the shower room is off the far side of the hall"
+  },
+  "photos": [
+    "photos/living-room.jpg",
+    "photos/kitchen.jpg",
+    "photos/hall.jpg",
+    "photos/window-corner.jpg"
+  ],
+  "keywords": [
+    "43 square metre flat with 2.45 metre ceilings",
+    "herringbone oak parquet in the living room and hall",
+    "white walls, tall casement windows, sheer curtains",
+    "mid-century blue sofa, low white sideboards, house plants",
+    "white gloss kitchen with a dark tile splashback and black pendant lamps",
+    "bright even daylight, small and tidy"
+  ],
+  "anchor": "Interior of a home, photographed at standing eye level",
+  "generation": {
+    "model": "marble-1.1",
+    "spz": "500k",
+    "tags": [
+      "splavinci",
+      "sample-scene",
+      "birch-row"
+    ]
+  },
+  "provenance": {
+    "plan": "scripts/make-blueprint.mjs, scene birch-row",
+    "photoCredits": "samples/birch-row/README.md"
+  },
+  "envelope": {
+    "widthM": 8.0,
+    "depthM": 6.4,
+    "ceilingM": 2.45
+  }
+}

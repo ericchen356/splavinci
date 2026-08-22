@@ -122,6 +122,7 @@ function useDrawnPath(polyline: Vec3[]): Vec3[] {
 export default function PlanPage() {
   const [showSplat, setShowSplat] = useState(true);
   const assets = useRoomAssets();
+  const resetPlan = usePlanStore((s) => s.resetPlan);
   const {
     waypoints, selectedId, settings, path, generating, generateError, dirty,
     addWaypoint, moveWaypoint, updateWaypoint, removeWaypoint, reorderWaypoint,
@@ -147,7 +148,15 @@ export default function PlanPage() {
        silently fall back to the default room with nothing on screen saying
        why. The call is memoised, so paying for it here costs one request. */
     void ensureRendersLoaded().then(() => {
-      if (live) switchAssetSet(wanted);
+      if (!live) return;
+      /* The plan is about the room it was drawn in. Waypoints are world
+         coordinates, so carrying them into a different capture puts them at
+         those same coordinates in a building with different walls - which is
+         not the plan the user made, and is usually inside something. The nav
+         asks before discarding a plan; this is the backstop for arriving here
+         by a route that did not go through it. */
+      resetPlan();
+      switchAssetSet(wanted);
     });
     return () => {
       live = false;

@@ -1,0 +1,42 @@
+{
+  "id": "maple-street",
+  "name": "Maple Street",
+  "description": "Two-bedroom apartment: open-plan living, galley kitchen behind a half-height partition, bedrooms off a central hall.",
+  "blueprint": {
+    "path": "blueprint.png",
+    "layoutDescription": "a two-bedroom apartment: an open-plan living room with a dining area along one wall, a galley kitchen behind a half-height partition, and two bedrooms opening off a short central hallway"
+  },
+  "photos": [
+    "photos/living-1.jpg",
+    "photos/living-2.jpg",
+    "photos/living-3.jpg"
+  ],
+  "keywords": [
+    "warm oak floors",
+    "mid-century furniture",
+    "large windows with soft morning light",
+    "house plants",
+    "calm neutral palette",
+    "lived-in but tidy"
+  ],
+  "anchor": "Interior of a home, photographed at standing eye level",
+  "generation": {
+    "model": "marble-1.1",
+    "spz": "500k",
+    "tags": [
+      "splavinci",
+      "sample-scene",
+      "maple-street"
+    ]
+  },
+  "provenance": {
+    "plan": "scripts/make-blueprint.mjs, scene maple-street",
+    "photoCredits": "samples/maple-street/README.md",
+    "renderedFrom": "The capture in public/generated/maple-street predates this file. It was composed from the same layout sentence, the same keywords and the same three photos, but against samples/blueprint.png - an earlier, cruder drawing of the same flat that blueprint.png here replaces. Re-running this intake reproduces the prompt exactly; it does not reproduce the world, because Marble is not seeded here."
+  },
+  "envelope": {
+    "widthM": 12.0,
+    "depthM": 8.0,
+    "ceilingM": 2.6
+  }
+}

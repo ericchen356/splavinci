@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, Vec3, Waypoint } from '@/lib/types';
-import { type WalkGrid } from '@/lib/path';
+import { cellIndex, worldToCell, type WalkGrid } from '@/lib/path';
 import { CLICK_SLOP_PX } from '@/components/scene/pointer';
 import { alpha, theme } from '@/components/theme';
 import { buildPlanLayer, planColours, strokeSegments } from './blueprint';
@@ -253,6 +253,7 @@ export function MiniMap({
   const projRef = useRef<Projection | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const [overMarker, setOverMarker] = useState(false);
+  const [overMap, setOverMap] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   /* The turn the plan is drawn at. Held in a ref and eased toward the camera's
@@ -543,6 +544,37 @@ export function MiniMap({
     if (canvas?.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
   }, []);
 
+  /**
+   * Is this world point on the drawn plan?
+   *
+   * The canvas is a rectangle and the plan inside it is not - on a long narrow
+   * room most of the panel is blank margin. Testing a click against the canvas
+   * made all of that margin behave like floor: a click far outside the
+   * building dropped a waypoint, because the snap in the page then dragged it
+   * to the nearest reachable cell, which could be metres away and in a room
+   * the user was not pointing at.
+   *
+   * One cell of tolerance, so clicking the very edge of a wall still counts.
+   * Anything further out is not a near miss, it is a click on the background.
+   */
+  const onMap = useCallback(
+    (x: number, z: number): boolean => {
+      const shown = plan?.shown;
+      if (!grid || !shown) return false;
+      const { col, row } = worldToCell(grid, x, z);
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const c = col + dc;
+          const r = row + dr;
+          if (c < 0 || r < 0 || c >= grid.cols || r >= grid.rows) continue;
+          if (shown[cellIndex(grid, c, r)]) return true;
+        }
+      }
+      return false;
+    },
+    [grid, plan],
+  );
+
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       const proj = projRef.current;
@@ -593,6 +625,8 @@ export function MiniMap({
             waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, MARKER_HIT_R,
           ) != null;
         setOverMarker(over);
+        const at = proj.toWorld(sx, sy);
+        setOverMap(onMap(at.x, at.z));
         return;
       }
       if (gesture.pointerId !== event.pointerId) return;
@@ -609,7 +643,7 @@ export function MiniMap({
       const { x, z } = proj.toWorld(sx, sy);
       onWaypointDrag?.(gesture.dragId, x, z);
     },
-    [waypoints, onWaypointDrag],
+    [waypoints, onWaypointDrag, onMap],
   );
 
   const handlePointerUp = useCallback(
@@ -635,9 +669,10 @@ export function MiniMap({
       }
       const { sx, sy } = localPoint(canvas, event);
       const { x, z } = proj.toWorld(sx, sy);
+      if (!onMap(x, z)) return;
       onPick?.(x, z);
     },
-    [endGesture, onPick, onWaypointPick, onCommentPick],
+    [endGesture, onPick, onWaypointPick, onCommentPick, onMap],
   );
 
   const handlePointerCancel = useCallback(
@@ -652,7 +687,7 @@ export function MiniMap({
     ? 'grabbing'
     : overMarker
       ? 'grab'
-      : onPick
+      : onPick && overMap
         ? 'crosshair'
         : 'default';
 
@@ -679,7 +714,10 @@ export function MiniMap({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
-          onPointerLeave={() => setOverMarker(false)}
+          onPointerLeave={() => {
+            setOverMarker(false);
+            setOverMap(false);
+          }}
           style={{ cursor }}
         />
       </div>

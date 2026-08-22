@@ -368,6 +368,14 @@ export type PlanLayer = {
   wallOutline: EdgeSegment[];
   /** Cells the camera can reach, if the caller supplied a radius. */
   reachable: Uint8Array | null;
+  /**
+   * Cells the map actually PAINTS.
+   *
+   * Exposed because it is also the map's hit area. The canvas is a rectangle
+   * and the plan inside it is not, so testing a click against the canvas made
+   * the blank margin - most of the panel on a narrow room - behave like floor.
+   */
+  shown: Uint8Array;
   reachableCells: number;
   regions: number;
 };
@@ -396,6 +404,7 @@ export function buildPlanLayer(
     openOutline: planOutline(grid, inShown),
     wallOutline: planOutline(grid, solid),
     reachable,
+    shown: masks.shown,
     reachableCells: reach?.cells ?? 0,
     regions: reach?.regions ?? 0,
   };

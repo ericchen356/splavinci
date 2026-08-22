@@ -1677,3 +1677,75 @@ select {
     --w-sidebar: 300px;
   }
 }
+
+/* ================================================================
+ * Modal
+ *
+ * One in the app: the guard on discarding a plan. It is a real element rather
+ * than window.confirm because a plan is worth naming before it is thrown away
+ * — how many waypoints, and why leaving loses them — and because the native
+ * dialog gives the destructive choice the same weight as the safe one.
+ * ================================================================ */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--s5);
+  /* Dark enough to pull focus off a bright render behind it, light enough that
+     the page is still legible as context for the decision. */
+  background: rgba(18, 18, 20, 0.32);
+  animation: modal-in var(--t-mid) var(--ease-out);
+}
+
+.modal__panel {
+  width: min(30rem, 100%);
+  padding: var(--s6);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  animation: modal-panel-in var(--t-mid) var(--ease-out);
+}
+
+.modal__title {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-4);
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.modal__body {
+  margin: 0 0 var(--s5);
+  font-size: var(--fs-2);
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+
+@keyframes modal-in {
+  from { opacity: 0; }
+}
+
+/* Rises a little rather than scaling: a panel that grows from nothing reads as
+   a notification, and this is a question that wants answering. */
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s2));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal,
+  .modal__panel {
+    animation-duration: 1ms;
+  }
+}

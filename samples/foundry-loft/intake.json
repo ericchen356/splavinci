@@ -1,0 +1,41 @@
+{
+  "id": "foundry-loft",
+  "name": "Foundry Loft",
+  "description": "Warehouse conversion: one open volume, a raised sleeping platform, services in a corner block.",
+  "blueprint": {
+    "path": "blueprint.png",
+    "layoutDescription": "one open warehouse volume with no partitions across the main floor, so the kitchen, the dining table, the living area and a studio corner all share the same room with cast-iron columns down the middle, plus a sleeping platform five steps up behind a balustrade at one end and a small block holding a shower room and a utility room in the opposite corner"
+  },
+  "photos": [
+    "photos/brick-living.jpg",
+    "photos/loft-living.jpg",
+    "photos/loft-bedroom.jpg"
+  ],
+  "keywords": [
+    "140 square metre warehouse conversion with 4 metre ceilings",
+    "reclaimed red brick walls, dark stained plank floor",
+    "cast-iron columns, exposed steel and timber ceiling",
+    "tall black steel factory windows, deep sills",
+    "cluster pendant lamps, grey modular sofa, reclaimed timber shelving",
+    "warm raking side light, industrial but lived-in"
+  ],
+  "anchor": "Interior of a home, photographed at standing eye level",
+  "generation": {
+    "model": "marble-1.1",
+    "spz": "500k",
+    "tags": [
+      "splavinci",
+      "sample-scene",
+      "foundry-loft"
+    ]
+  },
+  "provenance": {
+    "plan": "scripts/make-blueprint.mjs, scene foundry-loft",
+    "photoCredits": "samples/foundry-loft/README.md"
+  },
+  "envelope": {
+    "widthM": 14.4,
+    "depthM": 9.8,
+    "ceilingM": 4.1
+  }
+}
