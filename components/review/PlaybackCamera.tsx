@@ -21,13 +21,7 @@ import { useReviewStore } from '@/lib/review/reviewStore';
 
 const lookTarget = new THREE.Vector3();
 
-export function PlaybackCamera({
-  frames,
-  duration,
-}: {
-  frames: readonly FrameEntry[];
-  duration: number;
-}) {
+export function PlaybackCamera({ frames }: { frames: readonly FrameEntry[] }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const setCanvas = useReviewStore((s) => s.setCanvas);
@@ -41,7 +35,7 @@ export function PlaybackCamera({
     const store = useReviewStore.getState();
     // Clamp the step: a backgrounded tab returns a huge delta and would jump
     // the playhead most of the way through the flythrough on the next frame.
-    store.advance(Math.min(delta, 0.1), duration);
+    store.advance(Math.min(delta, 0.1));
 
     const sample = sampleAtTime(frames, store.time);
     if (!sample) return;

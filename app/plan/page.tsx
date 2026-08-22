@@ -29,6 +29,7 @@ import {
 import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
+import { shotPreviewPoints } from '@/components/plan/shotPreview';
 import { useRoomAssets } from '@/lib/scene';
 import { getWalkGrid } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
@@ -44,8 +45,8 @@ const STYLE_BLURB: Record<PathStyle, string> = {
 export default function PlanPage() {
   const assets = useRoomAssets();
   const {
-    waypoints, selectedId, settings, path, generating, dirty,
-    addWaypoint, updateWaypoint, removeWaypoint, reorderWaypoint,
+    waypoints, selectedId, settings, path, generating, generateError, dirty,
+    addWaypoint, moveWaypoint, updateWaypoint, removeWaypoint, reorderWaypoint,
     clearWaypoints, select, setStyle, generate,
   } = usePlanStore();
 
@@ -101,9 +102,28 @@ export default function PlanPage() {
     [addWaypoint, assets],
   );
 
+  /* Dragging a marker keeps its id, and with it its mode, duration, emphasis
+     and place in the running order - all of which delete-and-replace threw
+     away. moveWaypoint pins it, so the generator rebuilds the two legs either
+     side and serves the rest of the table from cache. */
+  const dragOnMap = useCallback(
+    (id: string, x: number, z: number) => {
+      moveWaypoint(id, [x, assets.floorYAtOr(x, z), z]);
+    },
+    [moveWaypoint, assets],
+  );
+
   const onGenerate = useCallback(() => {
-    generate(assets.colliderData);
+    void generate(assets.colliderData);
   }, [generate, assets.colliderData]);
+
+  /* The selected waypoint's shot, resolved and sampled without generating, so
+     the emphasis slider has something to move. Cheap enough to redo per tick:
+     no A*, no curve, 24 samples. */
+  const shotPreview = useMemo(
+    () => (selectedIndex >= 0 ? shotPreviewPoints(waypoints, selectedIndex, grid, settings.style) : []),
+    [waypoints, selectedIndex, grid, settings.style],
+  );
 
   const errors = path?.warnings.filter((w) => w.severity === 'error') ?? [];
   const notices = path?.warnings.filter((w) => w.severity !== 'error') ?? [];
@@ -121,6 +141,7 @@ export default function PlanPage() {
               waypoints={waypoints}
               selectedId={selectedId}
               polyline={path?.polyline ?? []}
+              shotPreview={shotPreview}
               onSelect={select}
             />
           </RoomScene>
@@ -133,12 +154,14 @@ export default function PlanPage() {
             waypoints={waypoints}
             selectedId={selectedId}
             polyline={path?.polyline ?? []}
+            shotPreview={shotPreview}
             camera={pose}
             onPick={dropAtMap}
             onWaypointPick={select}
+            onWaypointDrag={dragOnMap}
             height={230}
             title="Top-down"
-            hint="click to place · click a marker to edit"
+            hint="click to place · click a marker to edit · drag one to move it"
           />
         </div>
 
@@ -196,7 +219,8 @@ export default function PlanPage() {
             {mode === 'orbit'
               ? 'Drag to orbit · scroll to dolly · right-drag to pan.'
               : 'Drag to look · WASD to move · Q/E down/up · Shift to sprint.'}
-            {' '}Click the floor without dragging to drop a waypoint.
+            {' '}Click the floor without dragging to drop a waypoint, and drag a
+            marker on the mini-map to move one.
           </p>
         </div>
 
@@ -242,6 +266,11 @@ export default function PlanPage() {
           </div>
         )}
 
+        {generateError && (
+          <div style={{ ...noticeBox, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+            Generating failed: {generateError}
+          </div>
+        )}
         {errors.map((w, i) => (
           <div key={`e${i}`} style={{ ...noticeBox, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
             {w.message}
@@ -253,45 +282,57 @@ export default function PlanPage() {
           </div>
         ))}
 
-        {selected ? (
-          <WaypointPanel
-            waypoint={selected}
-            index={selectedIndex}
-            total={waypoints.length}
-            grid={grid}
-            style={settings.style}
-            onChange={(patch) => updateWaypoint(selected.id, patch)}
-            onRemove={() => removeWaypoint(selected.id)}
-            onReorder={(d) => reorderWaypoint(selected.id, d)}
-            onClose={() => select(null)}
-          />
-        ) : (
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-            <div style={sectionLabel}>Waypoints ({waypoints.length})</div>
-            {waypoints.length === 0
-              ? 'Click the floor in 3D, or anywhere on the mini-map, to drop a waypoint.'
-              : 'Select a waypoint to set its shot.'}
-            <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0' }}>
-              {waypoints.map((w, i) => {
-                const shot = path?.shots.find((s) => s.waypointId === w.id);
-                return (
-                  <li key={w.id}>
-                    <button
-                      onClick={() => select(w.id)}
-                      style={{ width: '100%', textAlign: 'left', marginBottom: 4, padding: '6px 9px' }}
-                    >
-                      <strong>{i + 1}.</strong>{' '}
-                      {shot ? `${shot.shotType} · ${shot.duration.toFixed(1)}s` : 'not generated'}
-                      <span style={{ color: 'var(--muted)', fontSize: 10 }}>
-                        {' '}({w.position[0].toFixed(1)}, {w.position[2].toFixed(1)})
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+        {/* Panel AND list. The list used to be the else-branch of the panel,
+            and placing a waypoint selects it, so the running order was hidden
+            for the whole time anyone was building one. */}
+        {selected && (
+          <div style={{ marginBottom: 14 }}>
+            <WaypointPanel
+              waypoint={selected}
+              index={selectedIndex}
+              total={waypoints.length}
+              grid={grid}
+              style={settings.style}
+              onChange={(patch) => updateWaypoint(selected.id, patch)}
+              onRemove={() => removeWaypoint(selected.id)}
+              onReorder={(d) => reorderWaypoint(selected.id, d)}
+              onClose={() => select(null)}
+              footer={
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 10, lineHeight: 1.45 }}>
+                  The dashed amber sweep in the viewport and on the mini-map is
+                  this shot at the current move size.
+                </div>
+              }
+            />
           </div>
         )}
+
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+          <div style={sectionLabel}>Waypoints ({waypoints.length})</div>
+          {waypoints.length === 0 &&
+            'Click the floor in 3D, or anywhere on the mini-map, to drop a waypoint.'}
+          {waypoints.length > 0 && !selected && 'Select a waypoint to set its shot.'}
+          <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0' }}>
+            {waypoints.map((w, i) => {
+              const shot = path?.shots.find((s) => s.waypointId === w.id);
+              return (
+                <li key={w.id}>
+                  <button
+                    className={w.id === selectedId ? 'primary' : undefined}
+                    onClick={() => select(w.id)}
+                    style={{ width: '100%', textAlign: 'left', marginBottom: 4, padding: '6px 9px' }}
+                  >
+                    <strong>{i + 1}.</strong>{' '}
+                    {shot ? `${shot.shotType} · ${shot.duration.toFixed(1)}s` : 'not generated'}
+                    <span style={{ color: 'var(--muted)', fontSize: 10 }}>
+                      {' '}({w.position[0].toFixed(1)}, {w.position[2].toFixed(1)})
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </aside>
     </div>
   );

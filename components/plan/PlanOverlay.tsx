@@ -8,7 +8,7 @@
  * mini-map draws, which is what keeps the two views honest about each other.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
@@ -19,6 +19,9 @@ export type PlanOverlayProps = {
   waypoints: readonly Waypoint[];
   selectedId: string | null;
   polyline: readonly Vec3[];
+  /** Where the selected waypoint's shot will sweep, drawn dashed while its
+   *  controls are being adjusted. See components/plan/shotPreview.ts. */
+  shotPreview?: readonly Vec3[];
   onSelect?: (id: string) => void;
   /** Camera height, so markers read at the height the camera will fly. */
   cameraHeight?: number;
@@ -26,11 +29,16 @@ export type PlanOverlayProps = {
 
 const ACCENT = '#6ea8fe';
 const SELECTED = '#dce9ff';
+const PREVIEW = '#ffb454';
+
+/** Shared default: a fresh literal would rebuild the preview memo every render. */
+const NO_POINTS: readonly Vec3[] = [];
 
 export function PlanOverlay({
   waypoints,
   selectedId,
   polyline,
+  shotPreview = NO_POINTS,
   onSelect,
   cameraHeight = 1.55,
 }: PlanOverlayProps) {
@@ -40,10 +48,20 @@ export function PlanOverlay({
     [polyline],
   );
 
+  // Already at camera height - this is where the camera goes, not floor work.
+  const previewPoints = useMemo<THREE.Vector3[]>(
+    () => shotPreview.map((p) => new THREE.Vector3(p[0], p[1], p[2])),
+    [shotPreview],
+  );
+
   return (
     <group name="plan-overlay">
       {routePoints.length > 1 && (
         <Line points={routePoints} color={ACCENT} lineWidth={3} dashed={false} />
+      )}
+
+      {previewPoints.length > 1 && (
+        <Line points={previewPoints} color={PREVIEW} lineWidth={2} dashed dashSize={0.14} gapSize={0.1} />
       )}
 
       {waypoints.map((w, i) => (
@@ -113,39 +131,45 @@ function WaypointMarker({
   );
 }
 
-/** Tiny canvas texture for the waypoint's order number. */
-const textureCache = new Map<string, THREE.CanvasTexture>();
-
+/**
+ * Tiny canvas texture for the waypoint's order number.
+ *
+ * Owned by the marker rather than by a module-level cache. The cache never
+ * dropped an entry, so every number a plan ever used kept a GPU texture alive
+ * for the lifetime of the tab - and it bought nothing, because a marker's key
+ * is its own order number and no two markers share one. Tying the texture to
+ * the component instead means it is freed when the marker goes away or is
+ * renumbered.
+ */
 function useOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | null {
-  return useMemo(() => {
-    if (typeof document === 'undefined') return null;
-    const key = `${n}:${selected}`;
-    const hit = textureCache.get(key);
-    if (hit) return hit;
+  const texture = useMemo(() => makeOrderTexture(n, selected), [n, selected]);
+  useEffect(() => () => texture?.dispose(), [texture]);
+  return texture;
+}
 
-    const size = 64;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+function makeOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
 
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
-    ctx.fillStyle = selected ? '#dce9ff' : '#16191f';
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = ACCENT;
-    ctx.stroke();
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
 
-    ctx.fillStyle = selected ? '#0d0f12' : '#e8eaed';
-    ctx.font = 'bold 32px ui-sans-serif, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(n), size / 2, size / 2 + 1);
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+  ctx.fillStyle = selected ? '#dce9ff' : '#16191f';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = ACCENT;
+  ctx.stroke();
 
-    const texture = new THREE.CanvasTexture(canvas);
-    textureCache.set(key, texture);
-    return texture;
-  }, [n, selected]);
+  ctx.fillStyle = selected ? '#0d0f12' : '#e8eaed';
+  ctx.font = 'bold 32px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(n), size / 2, size / 2 + 1);
+
+  return new THREE.CanvasTexture(canvas);
 }

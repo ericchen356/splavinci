@@ -9,22 +9,33 @@
  * here - when the user edits a shot from the technique label, this screen calls
  * back into lib/path, whose segment cache rebuilds only the legs touching that
  * waypoint and reuses the rest of the table.
+ *
+ * The store is read through selectors, not as a whole: PlaybackCamera writes
+ * `time` from inside useFrame, so a subscription to the whole store re-renders
+ * this page - and every derived object it hands to the mini-map - at frame
+ * rate for state it never reads.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Canvas } from '@react-three/fiber';
-import { CameraPresetDriver, RoomScene, derivePresets } from '@/components/scene';
+import { AssetStatusPanel, CameraPresetDriver, RoomScene, derivePresets } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
 import { ScrubBar } from '@/components/review/ScrubBar';
 import { useRoomAssets } from '@/lib/scene';
-import { getWalkGrid, sampleAtTime, segmentAtTime } from '@/lib/path';
+import { getWalkGrid, sampleAtTime, segmentAtTime, type PathSegmentInfo } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { useReviewStore } from '@/lib/review/reviewStore';
-import { CanvasRecorder, isRecordingSupported } from '@/lib/review/recorder';
-import type { Comment, Vec3 } from '@/lib/types';
+import { isRecordingSupported } from '@/lib/review/recorder';
+import type { Comment, FrameEntry, Vec3 } from '@/lib/types';
+
+/* Stable empties: a fresh [] literal per render busts every downstream memo,
+   and the mini-map redraws its whole plan layer when one changes identity. */
+const NO_FRAMES: readonly FrameEntry[] = [];
+const NO_SEGMENTS: readonly PathSegmentInfo[] = [];
+const NO_POLYLINE: readonly Vec3[] = [];
 
 function timecode(seconds: number): string {
   const s = Math.max(0, seconds);
@@ -33,16 +44,40 @@ function timecode(seconds: number): string {
 
 export default function ReviewPage() {
   const assets = useRoomAssets();
-  const { waypoints, settings, path, comments, addComment, removeComment, updateWaypoint, generate } =
-    usePlanStore();
-  const {
-    time, playing, recording, video, recordError, canvas, draft, editingWaypointId,
-    play, pause, toggle, seek, beginDraft, cancelDraft, editWaypoint,
-    setRecording, setVideo, setRecordError,
-  } = useReviewStore();
+
+  const waypoints = usePlanStore((s) => s.waypoints);
+  const settings = usePlanStore((s) => s.settings);
+  const path = usePlanStore((s) => s.path);
+  const dirty = usePlanStore((s) => s.dirty);
+  const generating = usePlanStore((s) => s.generating);
+  const generateError = usePlanStore((s) => s.generateError);
+  const comments = usePlanStore((s) => s.comments);
+  const addComment = usePlanStore((s) => s.addComment);
+  const removeComment = usePlanStore((s) => s.removeComment);
+  const updateWaypoint = usePlanStore((s) => s.updateWaypoint);
+  const generate = usePlanStore((s) => s.generate);
+
+  const time = useReviewStore((s) => s.time);
+  const playing = useReviewStore((s) => s.playing);
+  const recording = useReviewStore((s) => s.recording);
+  const video = useReviewStore((s) => s.video);
+  const recordError = useReviewStore((s) => s.recordError);
+  const canvas = useReviewStore((s) => s.canvas);
+  const draft = useReviewStore((s) => s.draft);
+  const editingWaypointId = useReviewStore((s) => s.editingWaypointId);
+
+  const pause = useReviewStore((s) => s.pause);
+  const toggle = useReviewStore((s) => s.toggle);
+  const seek = useReviewStore((s) => s.seek);
+  const setDuration = useReviewStore((s) => s.setDuration);
+  const startRecording = useReviewStore((s) => s.startRecording);
+  const cancelRecording = useReviewStore((s) => s.cancelRecording);
+  const releaseRecorder = useReviewStore((s) => s.releaseRecorder);
+  const beginDraft = useReviewStore((s) => s.beginDraft);
+  const cancelDraft = useReviewStore((s) => s.cancelDraft);
+  const editWaypoint = useReviewStore((s) => s.editWaypoint);
 
   const [draftText, setDraftText] = useState('');
-  const recorderRef = useRef<CanvasRecorder | null>(null);
 
   const grid = useMemo(
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
@@ -60,51 +95,77 @@ export default function ReviewPage() {
     if (assets.roomBounds) setStartNonce((n) => n + 1);
   }, [assets.roomBounds, assets.assetSetId]);
 
-  const frames = path?.frames ?? [];
+  const frames = path?.frames ?? NO_FRAMES;
   const duration = path?.duration ?? 0;
   const pose = useMemo(() => sampleAtTime(frames, time), [frames, time]);
-  const segment = useMemo(() => segmentAtTime(path?.segments ?? [], time), [path, time]);
+  const segment = useMemo(
+    () => segmentAtTime(path?.segments ?? NO_SEGMENTS, time),
+    [path, time],
+  );
   const activeShot = path?.shots.find((s) => s.waypointId === pose?.activeWaypointId) ?? null;
+  // The mini-map redraws whenever this prop changes identity, so it is derived
+  // from the pose rather than rebuilt as a literal on every unrelated render.
+  const mapCamera = useMemo(
+    () => (pose ? { position: pose.position, lookAt: pose.lookAt } : null),
+    [pose],
+  );
 
   const editing = waypoints.find((w) => w.id === editingWaypointId) ?? null;
   const editingIndex = waypoints.findIndex((w) => w.id === editingWaypointId);
 
+  const hasPath = frames.length > 0;
+  /* The path on screen is not the plan any more: the mini-map is drawing new
+     waypoints over an old route, the camera is flying the old one, and the
+     technique panel is reporting a shot that has not been generated yet. */
+  const stale = hasPath && dirty;
+  // A rebuild already under way is not something to warn about - it is the
+  // fix, in progress - and every tick of a slider would otherwise flash it.
+  const showStale = stale && !generating;
+
+  // The store is the clamp bound for seeking, so it has to hear about a path
+  // whose duration just shrank - otherwise the playhead sits past the end.
+  useEffect(() => {
+    setDuration(duration);
+  }, [duration, setDuration]);
+
+  // The plan store's generate settles its own failures into `generateError`,
+  // so there is nothing to catch here and nothing to wait for.
+  const runGenerate = useCallback(() => {
+    void generate(assets.colliderData);
+  }, [assets.colliderData, generate]);
+
   /* ---------------- recording ---------------- */
 
-  const supported = useMemo(() => isRecordingSupported(), []);
+  // Probed in an effect, not during render: MediaRecorder does not exist on
+  // the server, so a render-time probe renders "unsupported" into the HTML and
+  // then disagrees with the client on hydration. Null until probed, so the
+  // pre-hydration markup claims neither support nor the lack of it.
+  const [supported, setSupported] = useState<boolean | null>(null);
+  useEffect(() => setSupported(isRecordingSupported()), []);
 
-  const startRecording = useCallback(() => {
-    if (!canvas || duration <= 0) return;
-    try {
-      const recorder = new CanvasRecorder(canvas, path?.fps ?? 30);
-      recorderRef.current = recorder;
-      setRecordError(null);
-      setVideo(null);
-      seek(0);
-      recorder.start();
-      setRecording(true);
-      play();
-    } catch (err) {
-      setRecordError(err instanceof Error ? err.message : String(err));
-    }
-  }, [canvas, duration, path, play, seek, setRecordError, setRecording, setVideo]);
+  // Capture is real time and destructive to redo, so it is confirmed first.
+  const [armed, setArmed] = useState(false);
 
-  const finishRecording = useCallback(async () => {
-    const recorder = recorderRef.current;
-    if (!recorder) return;
-    recorderRef.current = null;
-    setRecording(false);
-    try {
-      setVideo(await recorder.stop());
-    } catch (err) {
-      setRecordError(err instanceof Error ? err.message : String(err));
-    }
-  }, [setRecordError, setRecording, setVideo]);
+  const canRecord =
+    supported === true && hasPath && !stale && !generating && !recording && canvas !== null;
+  const recordBlockedReason = !hasPath
+    ? 'Generate a path first.'
+    : stale
+      ? 'Regenerate the path first — this would export the old one.'
+      : !canvas
+        ? 'Waiting for the viewport.'
+        : undefined;
 
-  // Playback stops itself at the end; that is the cue to close the capture.
-  useEffect(() => {
-    if (recording && !playing) void finishRecording();
-  }, [recording, playing, finishRecording]);
+  const beginRecording = useCallback(() => {
+    if (!canvas || !hasPath || stale) return;
+    setArmed(false);
+    startRecording(canvas, path?.fps ?? 30);
+  }, [canvas, hasPath, stale, path, startRecording]);
+
+  // The recorder lives in the store, but the canvas it captures does not
+  // outlive this screen: dropping it here stops the stream tracks and clears
+  // the transport instead of stranding a running capture behind a nav click.
+  useEffect(() => () => releaseRecorder(), [releaseRecorder]);
 
   /* ---------------- comments ---------------- */
 
@@ -130,6 +191,8 @@ export default function ReviewPage() {
     setDraftText('');
   }, [draft, draftText, addComment, cancelDraft]);
 
+  // Inert during a capture: the store refuses to move the playhead while one
+  // is running, so a jump cannot land halfway through the export.
   const jumpToComment = useCallback((comment: Comment) => {
     pause();
     seek(comment.timeSeconds);
@@ -143,12 +206,10 @@ export default function ReviewPage() {
       updateWaypoint(editing.id, patch);
       // Marking the waypoint pinned scopes the rebuild to the legs touching it;
       // the rest of the frame table is served from cache.
-      generate(assets.colliderData);
+      runGenerate();
     },
-    [editing, updateWaypoint, generate, assets.colliderData],
+    [editing, updateWaypoint, runGenerate],
   );
-
-  const hasPath = frames.length > 0;
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
@@ -157,19 +218,35 @@ export default function ReviewPage() {
         <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <Canvas
             camera={{ position: startView.position, fov: 60, near: 0.05, far: 2000 }}
-            gl={{ preserveDrawingBuffer: true }}
+            // antialias off on Spark's advice: MSAA does nothing for Gaussian
+            // splats and costs fill rate - and this is the canvas being
+            // captured in real time, so it is the one that can least spare it.
+            gl={{ antialias: false, preserveDrawingBuffer: true }}
           >
-            <PlaybackCamera frames={frames} duration={duration} />
+            <PlaybackCamera frames={frames} />
             {!hasPath && <CameraPresetDriver preset={startView} nonce={startNonce} />}
             <RoomScene />
           </Canvas>
 
           {!hasPath && (
             <div style={centreNotice}>
-              <div style={{ marginBottom: 8 }}>No path generated yet.</div>
-              <Link href="/plan">Go to the plan screen →</Link>
+              {assets.settled ? (
+                <>
+                  <div style={{ marginBottom: 8 }}>No path generated yet.</div>
+                  <Link href="/plan">Go to the plan screen →</Link>
+                </>
+              ) : (
+                <div>Loading room… {Math.round(assets.progress * 100)}%</div>
+              )}
             </div>
           )}
+
+          {/* A 60 MB splat download is otherwise a black canvas with no
+              explanation, exactly as on /scene and /plan. Last, so its Retry
+              button stays clickable over the full-bleed notice above. */}
+          <div style={{ position: 'absolute', top: 12, left: 12, maxWidth: 300, zIndex: 1 }}>
+            <AssetStatusPanel assets={assets} />
+          </div>
 
           {recording && (
             <div style={{ ...badge, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
@@ -180,6 +257,29 @@ export default function ReviewPage() {
 
         {/* ---------------- transport ---------------- */}
         <div style={{ borderTop: '1px solid var(--line)', background: 'var(--panel)', padding: 12 }}>
+          {generating && (
+            <div style={{ ...banner, color: 'var(--accent)', borderColor: 'var(--accent-dim)' }}>
+              Regenerating the flythrough…
+            </div>
+          )}
+
+          {showStale && (
+            <div style={{ ...banner, color: 'var(--warn)', borderColor: 'var(--warn)' }}>
+              <div style={{ flex: 1, lineHeight: 1.45 }}>
+                <strong>This flythrough is out of date.</strong> The plan changed after it was
+                generated, so the camera and the route on the map are still the old path.
+              </div>
+              <button
+                className="primary"
+                onClick={runGenerate}
+                disabled={!assets.colliderData}
+                title={assets.colliderData ? undefined : 'Waiting for the collider to load.'}
+              >
+                Regenerate
+              </button>
+            </div>
+          )}
+
           <ScrubBar
             time={time}
             duration={duration}
@@ -187,13 +287,14 @@ export default function ReviewPage() {
             comments={comments}
             onSeek={seek}
             onCommentClick={jumpToComment}
+            disabled={recording}
           />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-            <button onClick={toggle} disabled={!hasPath} style={{ minWidth: 76 }}>
+            <button onClick={toggle} disabled={!hasPath || recording} style={{ minWidth: 76 }}>
               {playing ? '❚❚ Pause' : '▶ Play'}
             </button>
-            <button onClick={() => { pause(); seek(0); }} disabled={!hasPath}>↺</button>
+            <button onClick={() => { pause(); seek(0); }} disabled={!hasPath || recording}>↺</button>
 
             <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12, color: 'var(--muted)' }}>
               {timecode(time)} / {timecode(duration)}
@@ -205,6 +306,7 @@ export default function ReviewPage() {
                 onClick={() => editWaypoint(
                   editingWaypointId === activeShot.waypointId ? null : activeShot.waypointId,
                 )}
+                disabled={recording}
                 title="Edit this shot"
                 style={{
                   borderColor: 'var(--accent)',
@@ -221,14 +323,26 @@ export default function ReviewPage() {
 
             <div style={{ flex: 1 }} />
 
-            {supported ? (
-              <button onClick={startRecording} disabled={!hasPath || recording || !canvas}>
-                {recording ? 'Recording…' : 'Record'}
-              </button>
-            ) : (
+            {supported === false ? (
               <span style={{ fontSize: 11, color: 'var(--muted)' }}>
                 Recording unsupported in this browser
               </span>
+            ) : recording ? (
+              <button
+                onClick={cancelRecording}
+                style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                title="Stop the capture and discard what has been recorded."
+              >
+                Cancel recording
+              </button>
+            ) : (
+              <button
+                onClick={() => setArmed(true)}
+                disabled={!canRecord || armed}
+                title={recordBlockedReason}
+              >
+                Record
+              </button>
             )}
 
             {video ? (
@@ -248,8 +362,33 @@ export default function ReviewPage() {
             )}
           </div>
 
+          {/* Real time is the whole cost of this feature, so it is stated
+              before the capture starts rather than discovered during it. */}
+          {armed && canRecord && (
+            <div style={armedPanel}>
+              <div style={{ flex: 1, lineHeight: 1.5 }}>
+                Recording runs in real time: the capture takes the full{' '}
+                <strong>{timecode(duration)}</strong> of the flythrough, replayed from the start,
+                and ends by itself when the flythrough does. Keep this tab in front — a
+                background tab stops rendering and stalls the capture.
+              </div>
+              <button className="primary" onClick={beginRecording}>Start recording</button>
+              <button onClick={() => setArmed(false)}>Cancel</button>
+            </div>
+          )}
+
+          {recording && (
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
+              Transport is locked while recording — pausing or scrubbing would land in the
+              export. Cancel to discard the capture.
+            </div>
+          )}
+
           {recordError && (
             <div style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>{recordError}</div>
+          )}
+          {generateError && (
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>{generateError}</div>
           )}
         </div>
       </div>
@@ -265,8 +404,8 @@ export default function ReviewPage() {
           grid={grid}
           waypoints={waypoints}
           selectedId={editingWaypointId}
-          polyline={path?.polyline ?? []}
-          camera={pose ? { position: pose.position, lookAt: pose.lookAt } : null}
+          polyline={path?.polyline ?? NO_POLYLINE}
+          camera={mapCamera}
           comments={comments}
           onPick={onMapClick}
           onWaypointPick={(id) => editWaypoint(id)}
@@ -276,8 +415,21 @@ export default function ReviewPage() {
           }}
           height={240}
           title="Top-down"
-          hint={playing ? 'pause to leave a comment' : 'click to leave a comment'}
+          hint={
+            recording
+              ? 'capture in progress'
+              : playing
+                ? 'pause to leave a comment'
+                : 'click to leave a comment'
+          }
         />
+
+        {showStale && (
+          <div style={{ ...card, marginTop: 12, borderColor: 'var(--warn)', color: 'var(--warn)', fontSize: 11 }}>
+            Markers show the edited plan; the blue route is the path that was generated before
+            those edits.
+          </div>
+        )}
 
         {/* comment composer */}
         {draft && (
@@ -307,8 +459,10 @@ export default function ReviewPage() {
           </div>
         )}
 
-        {/* the reopened technique panel */}
-        {editing && (
+        {/* The reopened technique panel. Hidden during a capture: every control
+            on it either moves the playhead or regenerates the path underneath
+            the recorder. */}
+        {editing && !recording && (
           <div style={{ marginTop: 12 }}>
             <WaypointPanel
               waypoint={editing}
@@ -351,6 +505,7 @@ export default function ReviewPage() {
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                   <button
                     onClick={() => jumpToComment(c)}
+                    disabled={recording}
                     style={{ padding: '1px 6px', fontSize: 11 }}
                   >
                     {timecode(c.timeSeconds)}
@@ -382,8 +537,9 @@ const sectionLabel: React.CSSProperties = {
   color: 'var(--muted)', marginBottom: 6,
 };
 
+/* Right, not left: the asset panel owns the top-left corner on every screen. */
 const badge: React.CSSProperties = {
-  position: 'absolute', top: 12, left: 12, background: 'var(--panel)',
+  position: 'absolute', top: 12, right: 12, zIndex: 1, background: 'var(--panel)',
   border: '1px solid var(--line)', borderRadius: 'var(--radius)',
   padding: '6px 10px', fontSize: 12,
 };
@@ -392,4 +548,18 @@ const centreNotice: React.CSSProperties = {
   position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
   alignItems: 'center', justifyContent: 'center', textAlign: 'center',
   color: 'var(--muted)', fontSize: 13, pointerEvents: 'auto',
+};
+
+const banner: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10,
+  padding: '8px 10px', fontSize: 12,
+  background: 'var(--panel-2)', border: '1px solid var(--line)',
+  borderRadius: 'var(--radius)',
+};
+
+const armedPanel: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, marginTop: 10,
+  padding: '8px 10px', fontSize: 12, color: 'var(--text)',
+  background: 'var(--panel-2)', border: '1px solid var(--accent)',
+  borderRadius: 'var(--radius)',
 };

@@ -20,15 +20,18 @@ export type ScrubBarProps = {
   comments?: readonly Comment[];
   onSeek: (time: number) => void;
   onCommentClick?: (comment: Comment) => void;
+  /** Read-only track: still drawn, but it cannot be scrubbed or clicked. */
+  disabled?: boolean;
 };
 
 const HEIGHT = 34;
 
 export function ScrubBar({
-  time, duration, segments = [], comments = [], onSeek, onCommentClick,
+  time, duration, segments = [], comments = [], onSeek, onCommentClick, disabled = false,
 }: ScrubBarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef(false);
+  const interactive = duration > 0 && !disabled;
 
   const seekFromEvent = useCallback(
     (clientX: number) => {
@@ -44,7 +47,7 @@ export function ScrubBar({
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const el = trackRef.current;
-      if (!el || duration <= 0) return;
+      if (!el || !interactive) return;
       const rect = el.getBoundingClientRect();
       const x = event.clientX - rect.left;
 
@@ -61,7 +64,7 @@ export function ScrubBar({
       el.setPointerCapture(event.pointerId);
       seekFromEvent(event.clientX);
     },
-    [comments, duration, onCommentClick, seekFromEvent],
+    [comments, duration, interactive, onCommentClick, seekFromEvent],
   );
 
   const onPointerMove = useCallback(
@@ -71,21 +74,34 @@ export function ScrubBar({
     [seekFromEvent],
   );
 
-  const onPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const endDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     dragging.current = false;
-    trackRef.current?.releasePointerCapture(event.pointerId);
+    // Guarded: releasing a pointer that is no longer captured - the browser
+    // took it back, the gesture was cancelled - throws NotFoundError.
+    const el = trackRef.current;
+    if (el?.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId);
   }, []);
 
-  const pct = duration > 0 ? (time / duration) * 100 : 0;
+  // A cancelled or stolen gesture never reports pointerup, and a drag flag
+  // left set turns every subsequent hover over the track into a seek.
+  const onLostPointerCapture = useCallback(() => {
+    dragging.current = false;
+  }, []);
+
+  const pct = duration > 0 ? (Math.min(time, duration) / duration) * 100 : 0;
 
   return (
     <div
       ref={trackRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={onLostPointerCapture}
       style={{
-        position: 'relative', height: HEIGHT, cursor: duration > 0 ? 'pointer' : 'default',
+        position: 'relative', height: HEIGHT,
+        cursor: disabled ? 'not-allowed' : duration > 0 ? 'pointer' : 'default',
+        opacity: disabled ? 0.65 : 1,
         background: 'var(--panel-2)', border: '1px solid var(--line)',
         borderRadius: 'var(--radius)', overflow: 'hidden', touchAction: 'none',
       }}

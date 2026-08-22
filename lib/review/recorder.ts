@@ -41,10 +41,27 @@ export function isRecordingSupported(): boolean {
   );
 }
 
+/** The error event carries a DOMException in some browsers and nothing useful
+ *  in others, so the message is reconstructed rather than stringified. */
+function recorderError(event: ErrorEvent): Error {
+  const raw: unknown = event.error;
+  if (raw instanceof Error) return raw;
+  return new Error(event.message || 'The recorder stopped unexpectedly.');
+}
+
 export class CanvasRecorder {
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private stream: MediaStream | null = null;
+  /** Rejecter of the promise stop() is currently waiting on, if any. */
+  private pendingFailure: ((error: Error) => void) | null = null;
+
+  /**
+   * Raised when the capture dies on its own - a lost GPU context, a discarded
+   * tab, an encoder that gave up. Without it the failure lands nowhere and the
+   * caller goes on believing it is still recording.
+   */
+  onError: ((error: Error) => void) | null = null;
 
   readonly mimeType: string;
 
@@ -58,16 +75,28 @@ export class CanvasRecorder {
     if (this.recorder) throw new Error('Already recording.');
     this.chunks = [];
     this.stream = this.canvas.captureStream(this.fps);
-    this.recorder = new MediaRecorder(this.stream, {
+    const recorder = new MediaRecorder(this.stream, {
       mimeType: this.mimeType,
       videoBitsPerSecond: 12_000_000,
     });
-    this.recorder.ondataavailable = (event) => {
+    this.recorder = recorder;
+
+    recorder.ondataavailable = (event) => {
       if (event.data.size > 0) this.chunks.push(event.data);
+    };
+    // Attached here rather than in stop(): a capture can die at any point
+    // during the minutes it is running, not only while it is being closed.
+    recorder.onerror = (event) => {
+      const error = recorderError(event);
+      const pending = this.pendingFailure;
+      this.pendingFailure = null;
+      this.cleanup();
+      if (pending) pending(error);
+      else this.onError?.(error);
     };
     // A timeslice keeps chunks flowing, so a long capture is not held entirely
     // in one buffer until stop().
-    this.recorder.start(250);
+    recorder.start(250);
   }
 
   /** Resolves once the final chunk has been flushed. */
@@ -76,8 +105,9 @@ export class CanvasRecorder {
     if (!recorder) return Promise.reject(new Error('Not recording.'));
 
     return new Promise<RecordingResult>((resolve, reject) => {
-      recorder.onerror = (event) => reject(new Error(String(event)));
+      this.pendingFailure = reject;
       recorder.onstop = () => {
+        this.pendingFailure = null;
         const blob = new Blob(this.chunks, { type: this.mimeType });
         this.cleanup();
         if (blob.size === 0) {
@@ -94,6 +124,24 @@ export class CanvasRecorder {
       };
       recorder.stop();
     });
+  }
+
+  /**
+   * Throw the capture away and release the stream. For a cancel, and for the
+   * screen unmounting: the canvas being captured is going with it, so there is
+   * nothing left to record and the tracks must not be left running.
+   */
+  abort(): void {
+    const recorder = this.recorder;
+    this.pendingFailure = null;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') recorder.stop();
+    }
+    this.chunks = [];
+    this.cleanup();
   }
 
   get active(): boolean {

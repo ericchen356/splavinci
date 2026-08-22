@@ -18,6 +18,7 @@
 import { create } from 'zustand';
 import type { Comment, PathSettings, PathStyle, Vec3, Waypoint } from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
+import { describeError } from '@/lib/scene/loaders';
 import {
   createPathCache,
   generatePath,
@@ -27,6 +28,38 @@ import {
 
 /** Non-reactive: holds live THREE curves between generations. */
 let pathCache: PathCache = createPathCache();
+
+/**
+ * The in-flight generate, if any. Non-reactive because it exists to serialise
+ * calls, not to be rendered - `generating` is the flag the UI reads.
+ */
+let generateRun: Promise<void> | null = null;
+/** Newest collider handed to `generate`, read by the run after it yields. */
+let generateCollider: ColliderData | null = null;
+
+/**
+ * Resolve after the browser has painted.
+ *
+ * `generatePath` is synchronous, so raising `generating` and running it in the
+ * same task collapsed into a single render with the flag already lowered: the
+ * pending label could never appear, and the click just froze. The first
+ * animation frame runs before the paint that shows the flag, the second after
+ * it. The timeout is the escape hatch for a backgrounded tab, where rAF is
+ * suspended and the button would otherwise stick on "Generating…" forever.
+ */
+function afterPaint(): Promise<void> {
+  if (typeof requestAnimationFrame === 'undefined') return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 250);
+  });
+}
 
 let waypointCounter = 0;
 function nextWaypointId(): string {
@@ -54,6 +87,8 @@ export type PlanStore = {
   settings: PathSettings;
   path: PathResult | null;
   generating: boolean;
+  /** Whatever the last generate threw, so a failure is visible instead of lost. */
+  generateError: string | null;
   /** Bumped whenever waypoints change after a generate, so the UI can say "stale". */
   dirty: boolean;
 
@@ -62,12 +97,16 @@ export type PlanStore = {
   updateWaypoint(id: string, patch: Partial<Omit<Waypoint, 'id'>>): void;
   removeWaypoint(id: string): void;
   reorderWaypoint(id: string, delta: number): void;
+  /** Empty the route but keep the comments: same room, so they still point at
+   *  places the user can see. Use `resetPlan` when the room itself changes. */
   clearWaypoints(): void;
+  /** Throw away everything anchored to the current room's coordinates. */
+  resetPlan(): void;
 
   select(id: string | null): void;
   setStyle(style: PathStyle): void;
 
-  generate(collider: ColliderData | null): void;
+  generate(collider: ColliderData | null): Promise<void>;
 
   /* comments live here too so the review screen and the mini-map share one list */
   comments: Comment[];
@@ -83,6 +122,7 @@ export const usePlanStore = create<PlanStore>((set, get) => ({
   settings: { style: 'realEstate' },
   path: null,
   generating: false,
+  generateError: null,
   dirty: false,
   comments: [],
 
@@ -130,7 +170,24 @@ export const usePlanStore = create<PlanStore>((set, get) => ({
 
   clearWaypoints() {
     pathCache = createPathCache();
-    set({ waypoints: [], selectedId: null, path: null, dirty: false });
+    set({ waypoints: [], selectedId: null, path: null, dirty: false, generateError: null });
+  },
+
+  resetPlan() {
+    // Comments go too. They are world coordinates plus a timestamp on a path
+    // that no longer exists, so keeping them across a capture switch pins every
+    // note to a spot in a room that is not loaded any more - while deleting the
+    // waypoints those notes were written about. Everything anchored to the old
+    // room leaves together or none of it does.
+    pathCache = createPathCache();
+    set({
+      waypoints: [],
+      selectedId: null,
+      path: null,
+      dirty: false,
+      generateError: null,
+      comments: [],
+    });
   },
 
   select(id) {
@@ -142,23 +199,48 @@ export const usePlanStore = create<PlanStore>((set, get) => ({
   },
 
   generate(collider) {
-    const { waypoints, settings } = get();
-    set({ generating: true });
-    try {
-      const path = generatePath({ collider, waypoints, settings }, pathCache);
-      // Generation consumes the pins: they have done their job of scoping the
-      // recompute, and leaving them set would force the same legs to rebuild
-      // on every subsequent generate.
-      set({
-        path,
-        generating: false,
-        dirty: false,
-        waypoints: waypoints.map((w) => (w.pinned ? { ...w, pinned: false } : w)),
-      });
-    } catch (err) {
-      set({ generating: false });
-      throw err;
-    }
+    // Calls that land while one is already yielding to the paint are folded
+    // into it rather than queued behind it - a slider that fires thirty edits a
+    // second must not book thirty rebuilds. Folding is safe because the run
+    // reads its inputs AFTER the yield: whatever changed in the meantime is
+    // already in `get()` and in `generateCollider` by the time work starts.
+    // Nothing can arrive during the work itself - `generatePath` is
+    // synchronous, so no handler runs until it returns.
+    generateCollider = collider;
+    if (generateRun) return generateRun;
+
+    const run = (async () => {
+      set({ generating: true, generateError: null });
+      await afterPaint();
+
+      const { waypoints, settings } = get();
+      try {
+        const path = generatePath(
+          { collider: generateCollider, waypoints, settings },
+          pathCache,
+        );
+        // Generation consumes the pins: they have done their job of scoping the
+        // recompute, and leaving them set would force the same legs to rebuild
+        // on every subsequent generate.
+        set({
+          path,
+          generating: false,
+          dirty: false,
+          waypoints: waypoints.map((w) => (w.pinned ? { ...w, pinned: false } : w)),
+        });
+      } catch (err) {
+        // Rethrowing landed in an onClick handler, where nothing catches it and
+        // the user sees the button do nothing at all. The failure is state now,
+        // so the screen can say what went wrong.
+        set({ generating: false, generateError: describeError(err) });
+      }
+    })();
+
+    generateRun = run;
+    void run.finally(() => {
+      if (generateRun === run) generateRun = null;
+    });
+    return run;
   },
 
   addComment(comment) {

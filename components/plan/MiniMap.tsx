@@ -11,11 +11,20 @@
  * Shared by both screens rather than duplicated: the plan screen passes
  * waypoints and takes clicks, the review screen passes a camera pose and
  * comments. Everything is optional, so each screen lights up only what it uses.
+ *
+ * INTERACTION
+ * Everything runs off pointer events, not `click`, for two reasons. A `click`
+ * fires at the end of a drag as well as a press, so a stray drag across the map
+ * used to drop a waypoint nobody asked for; and a marker cannot be dragged at
+ * all through a click handler. One gesture is tracked from pointerdown, and
+ * once its travel passes CLICK_SLOP_PX it is a drag and can never also place
+ * anything - the same rule the 3D view applies through `isDrag`.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, Vec3, Waypoint } from '@/lib/types';
 import { type WalkGrid } from '@/lib/path';
+import { CLICK_SLOP_PX } from '@/components/scene/pointer';
 import { buildPlanLayer, DEFAULT_PLAN_COLOURS, strokeSegments } from './blueprint';
 
 export type MiniMapProps = {
@@ -27,15 +36,75 @@ export type MiniMapProps = {
   /** Live camera pose - draws a dot with a facing arrow. */
   camera?: { position: Vec3; lookAt: Vec3 } | null;
   comments?: readonly Comment[];
+  /** Where the selected waypoint's shot will take the camera, drawn dashed.
+   *  See components/plan/shotPreview.ts. */
+  shotPreview?: readonly Vec3[];
   /** Click on empty floor. Receives world x/z. */
   onPick?: (x: number, z: number) => void;
   onWaypointPick?: (id: string) => void;
   onCommentPick?: (id: string) => void;
+  /** Drag a marker to a new world x/z. Omit to leave markers immovable. */
+  onWaypointDrag?: (id: string, x: number, z: number) => void;
   height?: number;
   /** Shown top-left inside the map. */
   title?: string;
   hint?: string;
 };
+
+/** Shared default, so a screen that passes no preview does not hand `draw` a
+ *  fresh array - and a fresh dependency - on every render. */
+const NO_POINTS: readonly Vec3[] = [];
+
+/** A press in progress, from pointerdown to pointerup. */
+type Gesture = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  /** Travel has passed the slop, so this is a drag and never a placement. */
+  dragging: boolean;
+  /** Waypoint to move as the pointer moves, if there is one and it can move. */
+  dragId: string | null;
+  /** What was under the pointer when it went down - a click resolves to this
+   *  rather than to whatever happens to be under it on release. */
+  waypointId: string | null;
+  commentId: string | null;
+};
+
+/**
+ * The topmost marker within `radius` of a screen point, or null.
+ *
+ * Nearest rather than first in list order: two waypoints that overlap on the
+ * map both have to stay reachable, and picking by list order made the earlier
+ * one permanently win. Ties go to the later item, which is the one drawn on
+ * top, so the hit matches what the user is actually looking at.
+ */
+function hitTest<T>(
+  items: readonly T[],
+  at: (item: T) => { sx: number; sy: number },
+  sx: number,
+  sy: number,
+  radius: number,
+): T | null {
+  let best: T | null = null;
+  let bestDistance = radius;
+  for (const item of items) {
+    const p = at(item);
+    const distance = Math.hypot(p.sx - sx, p.sy - sy);
+    if (distance <= bestDistance) {
+      best = item;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function localPoint(
+  canvas: HTMLCanvasElement,
+  event: { clientX: number; clientY: number },
+): { sx: number; sy: number } {
+  const rect = canvas.getBoundingClientRect();
+  return { sx: event.clientX - rect.left, sy: event.clientY - rect.top };
+}
 
 type Projection = {
   toScreen(x: number, z: number): { sx: number; sy: number };
@@ -80,9 +149,11 @@ export function MiniMap({
   polyline = [],
   camera = null,
   comments = [],
+  shotPreview = NO_POINTS,
   onPick,
   onWaypointPick,
   onCommentPick,
+  onWaypointDrag,
   height = 240,
   title,
   hint,
@@ -90,6 +161,9 @@ export function MiniMap({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const projRef = useRef<Projection | null>(null);
+  const gestureRef = useRef<Gesture | null>(null);
+  const [overMarker, setOverMarker] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
   const plan = useMemo(() => (grid ? buildPlanLayer(grid) : null), [grid]);
 
@@ -158,6 +232,21 @@ export function MiniMap({
         else ctx.lineTo(sx, sy);
       });
       ctx.stroke();
+    }
+
+    /* what the selected waypoint's shot will sweep, before anything is generated */
+    if (shotPreview.length > 1) {
+      ctx.strokeStyle = '#ffb454';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      shotPreview.forEach((p, i) => {
+        const { sx, sy } = proj.toScreen(p[0], p[2]);
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     /* waypoints, numbered in travel order */
@@ -238,7 +327,10 @@ export function MiniMap({
       ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
       ctx.fillText(hint, 8, height - 8);
     }
-  }, [grid, plan, waypoints, selectedId, polyline, camera, comments, height, title, hint]);
+  }, [
+    grid, plan, waypoints, selectedId, polyline, camera, comments, shotPreview,
+    height, title, hint,
+  ]);
 
   useEffect(() => {
     draw();
@@ -252,47 +344,136 @@ export function MiniMap({
     return () => ro.disconnect();
   }, [draw]);
 
-  const handleClick = useCallback(
-    (event: React.MouseEvent<HTMLCanvasElement>) => {
+  const endGesture = useCallback((pointerId: number) => {
+    gestureRef.current = null;
+    setDragging(false);
+    const canvas = canvasRef.current;
+    if (canvas?.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const proj = projRef.current;
+      const canvas = canvasRef.current;
+      if (!proj || !canvas || event.button !== 0) return;
+      const { sx, sy } = localPoint(canvas, event);
+
+      // Pins and waypoints take precedence over dropping a new one.
+      const comment = hitTest(comments, (c) => proj.toScreen(c.position[0], c.position[2]), sx, sy, 9);
+      const waypoint = comment
+        ? null
+        : hitTest(waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, 10);
+
+      gestureRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false,
+        dragId: waypoint && onWaypointDrag ? waypoint.id : null,
+        waypointId: waypoint?.id ?? null,
+        commentId: comment?.id ?? null,
+      };
+      // Keep the gesture even if the pointer leaves the canvas mid-drag.
+      canvas.setPointerCapture(event.pointerId);
+      // Otherwise the press starts a text selection instead of a drag.
+      event.preventDefault();
+    },
+    [comments, waypoints, onWaypointDrag],
+  );
+
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
       const proj = projRef.current;
       const canvas = canvasRef.current;
       if (!proj || !canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const sx = event.clientX - rect.left;
-      const sy = event.clientY - rect.top;
+      const { sx, sy } = localPoint(canvas, event);
+      const gesture = gestureRef.current;
 
-      // Pins and waypoints take precedence over dropping a new one.
-      for (const c of comments) {
-        const p = proj.toScreen(c.position[0], c.position[2]);
-        if (Math.hypot(p.sx - sx, p.sy - sy) <= 9) {
-          onCommentPick?.(c.id);
-          return;
-        }
+      if (!gesture) {
+        // Hovering: say that markers can be picked up before anyone tries.
+        const over =
+          onWaypointDrag != null &&
+          hitTest(waypoints, (w) => proj.toScreen(w.position[0], w.position[2]), sx, sy, 10) != null;
+        setOverMarker(over);
+        return;
       }
-      for (const w of waypoints) {
-        const p = proj.toScreen(w.position[0], w.position[2]);
-        if (Math.hypot(p.sx - sx, p.sy - sy) <= 10) {
-          onWaypointPick?.(w.id);
-          return;
-        }
-      }
+      if (gesture.pointerId !== event.pointerId) return;
 
+      if (
+        !gesture.dragging &&
+        Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > CLICK_SLOP_PX
+      ) {
+        gesture.dragging = true;
+        if (gesture.dragId) setDragging(true);
+      }
+      if (!gesture.dragging || !gesture.dragId) return;
+
+      const { x, z } = proj.toWorld(sx, sy);
+      onWaypointDrag?.(gesture.dragId, x, z);
+    },
+    [waypoints, onWaypointDrag],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      const proj = projRef.current;
+      const canvas = canvasRef.current;
+      const wasDrag = gesture.dragging;
+      endGesture(event.pointerId);
+
+      // A drag is a drag whether or not it moved a marker: releasing one over
+      // empty floor must not also drop a waypoint there.
+      if (wasDrag || !proj || !canvas) return;
+
+      if (gesture.commentId) {
+        onCommentPick?.(gesture.commentId);
+        return;
+      }
+      if (gesture.waypointId) {
+        onWaypointPick?.(gesture.waypointId);
+        return;
+      }
+      const { sx, sy } = localPoint(canvas, event);
       const { x, z } = proj.toWorld(sx, sy);
       onPick?.(x, z);
     },
-    [comments, waypoints, onPick, onWaypointPick, onCommentPick],
+    [endGesture, onPick, onWaypointPick, onCommentPick],
   );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (gestureRef.current?.pointerId !== event.pointerId) return;
+      endGesture(event.pointerId);
+    },
+    [endGesture],
+  );
+
+  const cursor = dragging
+    ? 'grabbing'
+    : overMarker
+      ? 'grab'
+      : onPick
+        ? 'crosshair'
+        : 'default';
 
   return (
     <div ref={wrapRef} style={{ width: '100%' }}>
       <canvas
         ref={canvasRef}
-        onClick={handleClick}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onPointerLeave={() => setOverMarker(false)}
         style={{
           display: 'block',
           borderRadius: 'var(--radius)',
           border: '1px solid var(--line)',
-          cursor: onPick ? 'crosshair' : 'default',
+          cursor,
+          // A touch drag has to move the marker, not scroll the page.
+          touchAction: 'none',
         }}
       />
     </div>
