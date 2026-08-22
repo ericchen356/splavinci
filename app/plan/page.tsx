@@ -31,7 +31,15 @@ import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { shotPreviewPoints } from '@/components/plan/shotPreview';
 import { useRoomAssets } from '@/lib/scene';
-import { getWalkGrid } from '@/lib/path';
+import {
+  cellIndex,
+  cellToWorld,
+  findNearestCell,
+  getWalkGrid,
+  reachableMask,
+  resolveCameraRadius,
+  worldToCell,
+} from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { PATH_STYLES, type PathStyle, type Vec3 } from '@/lib/types';
 
@@ -83,6 +91,34 @@ export default function PlanPage() {
     return Math.max(3.2, Math.max(b.max.x - b.min.x, b.max.z - b.min.z) * 0.15);
   }, [assets.roomBounds]);
 
+  /* The camera's effective clearance, and the space it can actually reach at
+     that clearance. Both the map and waypoint placement need it: a waypoint
+     dropped in a pocket the camera cannot enter is not a plan, it is an error
+     message waiting to happen. */
+  const camera = useMemo(() => {
+    if (!grid) return null;
+    const resolved = resolveCameraRadius(grid, 0.3);
+    return { ...resolved, reach: reachableMask(grid, resolved.radius) };
+  }, [grid]);
+
+  /* Pull a point into reachable space rather than refusing the click.
+     Refusing gives the user nothing to act on - the gap that cut the pocket off
+     is often a few centimetres and invisible at map scale - whereas landing on
+     the nearest spot the camera can occupy is almost always what was meant. */
+  const snapToReachable = useCallback(
+    (x: number, z: number): { x: number; z: number; moved: boolean } => {
+      if (!grid || !camera) return { x, z, moved: false };
+      const { col, row } = worldToCell(grid, x, z);
+      if (camera.reach.mask[cellIndex(grid, col, row)]) return { x, z, moved: false };
+      const near = findNearestCell(grid, col, row, (c, r) =>
+        camera.reach.mask[cellIndex(grid, c, r)] === 1);
+      if (!near) return { x, z, moved: false };
+      const w = cellToWorld(grid, near.col, near.row);
+      return { x: w.x, z: w.z, moved: true };
+    },
+    [grid, camera],
+  );
+
   /* Both entry points funnel into the same action. The only difference is where
      y comes from: a 3D click already has a surface, a mini-map click does not. */
   const dropAt3D = useCallback(
@@ -90,16 +126,18 @@ export default function PlanPage() {
       // Looking around in fly mode - or orbiting - would otherwise drop a
       // waypoint wherever the drag happened to end.
       if (isDrag(event)) return;
-      addWaypoint(point);
+      const snapped = snapToReachable(point[0], point[2]);
+      addWaypoint([snapped.x, assets.floorYAtOr(snapped.x, snapped.z), snapped.z]);
     },
-    [addWaypoint],
+    [addWaypoint, assets, snapToReachable],
   );
 
   const dropAtMap = useCallback(
     (x: number, z: number) => {
-      addWaypoint([x, assets.floorYAtOr(x, z), z]);
+      const snapped = snapToReachable(x, z);
+      addWaypoint([snapped.x, assets.floorYAtOr(snapped.x, snapped.z), snapped.z]);
     },
-    [addWaypoint, assets],
+    [addWaypoint, assets, snapToReachable],
   );
 
   /* Dragging a marker keeps its id, and with it its mode, duration, emphasis
@@ -151,6 +189,7 @@ export default function PlanPage() {
         <div style={{ position: 'absolute', left: 12, bottom: 12, width: 300 }}>
           <MiniMap
             grid={grid}
+            cameraRadius={camera?.radius}
             waypoints={waypoints}
             selectedId={selectedId}
             polyline={path?.polyline ?? []}

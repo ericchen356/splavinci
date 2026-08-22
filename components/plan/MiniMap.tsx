@@ -46,6 +46,11 @@ export type MiniMapProps = {
   /** Drag a marker to a new world x/z. Omit to leave markers immovable. */
   onWaypointDrag?: (id: string, x: number, z: number) => void;
   height?: number;
+  /**
+   * Camera body radius. Supplying it lets the map distinguish floor the camera
+   * can reach from floor cut off behind gaps too narrow for it.
+   */
+  cameraRadius?: number;
   /** Shown top-left inside the map. */
   title?: string;
   hint?: string;
@@ -155,6 +160,7 @@ export function MiniMap({
   onCommentPick,
   onWaypointDrag,
   height = 240,
+  cameraRadius,
   title,
   hint,
 }: MiniMapProps) {
@@ -165,7 +171,10 @@ export function MiniMap({
   const [overMarker, setOverMarker] = useState(false);
   const [dragging, setDragging] = useState(false);
 
-  const plan = useMemo(() => (grid ? buildPlanLayer(grid) : null), [grid]);
+  const plan = useMemo(
+    () => (grid ? buildPlanLayer(grid, DEFAULT_PLAN_COLOURS, cameraRadius) : null),
+    [grid, cameraRadius],
+  );
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;

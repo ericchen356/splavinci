@@ -28,7 +28,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { box, mergeParts } from './lib/geometry.mjs';
 import { writeGlb } from './lib/glb.mjs';
-import { readSpz, otsuThreshold } from './lib/spz-read.mjs';
+import { readSpz } from './lib/spz-read.mjs';
 
 const [, , inPath, outDir = 'public/derived', cellArg] = process.argv;
 if (!inPath) {
@@ -104,38 +104,92 @@ for (let i = 0; i < n; i++) {
 console.log(`skipped ${skippedFaint.toLocaleString()} faint (< ${MIN_OPACITY} opacity), ` +
             `${skippedOutside.toLocaleString()} outside height range`);
 
-/* ------------------- floor height and band density per cell ---------------- */
+/* --------------- carve free space from the vertical profile ---------------- */
 
+/**
+ * Per column, ask "is there a person-height column of air here", not "is there
+ * stuff here".
+ *
+ * Thresholding density directly cannot work across a real capture: coverage is
+ * wildly uneven, so the same wall returns a hundred times more splats where the
+ * camera passed close than it does across the room, and one global threshold
+ * calls the first solid and the second empty. Absence of matter has no such
+ * problem - empty air returns nothing no matter how well it was observed - so
+ * the test is for a clear vertical gap above the floor.
+ *
+ * Occupancy within a column is judged RELATIVE to that column's own peak, which
+ * is what makes it coverage-invariant, with an absolute floor so a column
+ * holding nothing but noise does not manufacture a peak out of it.
+ *
+ * Three states, not two. A cell nobody observed is not the same as a cell
+ * observed to be empty, and collapsing them is what made the map read as vague
+ * blobs: unsurveyed space looked identical to open floor.
+ */
+const UNKNOWN = 0;
+const FREE = 1;
+const BLOCKED = 2;
+
+const HEADROOM = Number(process.env.HEADROOM ?? 1.8);
+const REL_OCCUPIED = Number(process.env.REL_OCCUPIED ?? 0.06);
+const MIN_COLUMN_MASS = Number(process.env.MIN_COLUMN_MASS ?? 0.8);
+
+const state = new Uint8Array(cellCount);
 const terrain = new Float32Array(cellCount).fill(NaN);
-const bandDensity = new Float32Array(cellCount);
+const headBins = Math.max(1, Math.round(HEADROOM / HEIGHT_BIN));
 
 for (let c = 0; c < cellCount; c++) {
   const base = c * bins;
   let peak = 0;
-  let column = 0;
+  let mass = 0;
   for (let b = 0; b < bins; b++) {
     const d = density[base + b];
-    column += d;
+    mass += d;
     if (d > peak) peak = d;
   }
-  if (column <= 0 || peak <= 0) continue;
+  // Never observed: no opinion. Distinct from "observed and empty".
+  if (mass < MIN_COLUMN_MASS || peak <= 0) continue;
 
-  // Ground is the first substantial return scanning upward - not the minimum,
-  // which is as likely to be a reconstruction artefact below the floor.
-  const trigger = peak * FLOOR_PEAK_FRACTION;
-  let floorBin = -1;
-  for (let b = 0; b < bins; b++) {
-    if (density[base + b] >= trigger) { floorBin = b; break; }
+  const occupiedAt = Math.max(REL_OCCUPIED * peak, MIN_COLUMN_MASS * 0.05);
+  const solid = (b) => density[base + b] >= occupiedAt;
+
+  // Ground: the lowest sustained return, not the lowest single bin, so one
+  // stray splat below the floor does not define the surface.
+  let groundBin = -1;
+  for (let b = 0; b < bins - 1; b++) {
+    if (solid(b) && (solid(b + 1) || b + 1 >= bins - 1)) { groundBin = b; break; }
   }
-  if (floorBin < 0) continue;
+  if (groundBin < 0) continue;
+  terrain[c] = minY + (groundBin + 0.5) * HEIGHT_BIN;
 
-  terrain[c] = minY + (floorBin + 0.5) * HEIGHT_BIN;
+  // Tallest run of clear bins starting above the ground return.
+  let run = 0;
+  let bestRun = 0;
+  for (let b = groundBin + 1; b < bins; b++) {
+    if (solid(b)) { run = 0; continue; }
+    run++;
+    if (run > bestRun) bestRun = run;
+    // Air above the top of the observed column counts as clear.
+  }
+  const unobservedAbove = Math.max(0, bins - 1 - lastSolidBin(base, bins, solid));
+  const clearance = Math.max(bestRun, unobservedAbove);
 
-  const loBin = Math.min(bins - 1, floorBin + Math.round(BAND_LOW / HEIGHT_BIN));
-  const hiBin = Math.min(bins - 1, floorBin + Math.round(BAND_HIGH / HEIGHT_BIN));
-  let inBand = 0;
-  for (let b = loBin; b <= hiBin; b++) inBand += density[base + b];
-  bandDensity[c] = inBand;
+  state[c] = clearance >= headBins ? FREE : BLOCKED;
+}
+
+function lastSolidBin(base, binCount, solid) {
+  for (let b = binCount - 1; b >= 0; b--) if (solid(b)) return b;
+  return -1;
+}
+
+{
+  let free = 0, blocked = 0, unknown = 0;
+  for (let c = 0; c < cellCount; c++) {
+    if (state[c] === FREE) free++;
+    else if (state[c] === BLOCKED) blocked++;
+    else unknown++;
+  }
+  console.log(`carve: free ${free}, blocked ${blocked}, unknown ${unknown} ` +
+              `(headroom ${HEADROOM} m, occupied at ${(REL_OCCUPIED * 100).toFixed(0)}% of column peak)`);
 }
 
 /* ------------------------- terrain outlier rejection ---------------------- */
@@ -169,21 +223,10 @@ for (let c = 0; c < cellCount; c++) {
   }
 }
 
-/* ----------------------- automatic occupancy threshold -------------------- */
-
-const occupiedSamples = [];
-for (let c = 0; c < cellCount; c++) {
-  if (!Number.isNaN(terrain[c])) occupiedSamples.push(bandDensity[c]);
-}
-const wallThreshold = otsuThreshold(occupiedSamples);
-console.log(`Otsu wall threshold ${wallThreshold.toFixed(2)} ` +
-            `(band density over ${occupiedSamples.length.toLocaleString()} floor cells)`);
+/* --------------------------- masks from the carve -------------------------- */
 
 const blocked = new Uint8Array(cellCount);
-for (let c = 0; c < cellCount; c++) {
-  if (Number.isNaN(terrain[c])) continue;
-  if (bandDensity[c] >= wallThreshold) blocked[c] = 1;
-}
+for (let c = 0; c < cellCount; c++) if (state[c] === BLOCKED) blocked[c] = 1;
 
 // Lift so the median ground sits at y = 0.
 const groundSamples = [];
@@ -193,6 +236,7 @@ const groundOffset = groundSamples.length
   ? -groundSamples[Math.floor(groundSamples.length / 2)]
   : 0;
 console.log(`ground offset ${groundOffset.toFixed(3)} m (median terrain -> 0)`);
+
 /* --------------------------- grid morphology ------------------------------ */
 /**
  * Per-cell thresholding decides each cell in isolation, so it produces speckle:
@@ -359,51 +403,14 @@ function keepLargeComponents(mask, cols, rows, minFraction = 0.04) {
     blocked[c] = obstacleMask[c] && !Number.isNaN(terrain[c]) ? 1 : 0;
   }
 
-  // Keep only the largest connected WALKABLE region.
+  // Deliberately NOT pruned to the largest walkable region here.
   //
-  // Pruning the floor mask is not enough: obstacles then carve it into pieces,
-  // and a user who drops one waypoint in a marooned pocket gets "no walkable
-  // route" with no way to tell from looking at the map that the two areas were
-  // never connected. On this capture that was happening for roughly half of
-  // all waypoint pairs. Discarding the marooned pockets costs a little floor
-  // area and buys the guarantee that any two placeable points can be routed.
-  {
-    const walkable = new Uint8Array(cellCount);
-    for (let c = 0; c < cellCount; c++) {
-      walkable[c] = !Number.isNaN(terrain[c]) && !blocked[c] ? 1 : 0;
-    }
-    let best = -1;
-    let bestSize = 0;
-    const label = new Int32Array(cellCount).fill(-1);
-    const sizes = [];
-    const stack = [];
-    for (let seed = 0; seed < cellCount; seed++) {
-      if (!walkable[seed] || label[seed] !== -1) continue;
-      const id = sizes.length;
-      let size = 0;
-      stack.push(seed);
-      label[seed] = id;
-      while (stack.length) {
-        const cur = stack.pop();
-        size++;
-        const cx = cur % cols, cz = Math.floor(cur / cols);
-        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const nx = cx + dx, nz = cz + dz;
-          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
-          const nc = nz * cols + nx;
-          if (walkable[nc] && label[nc] === -1) { label[nc] = id; stack.push(nc); }
-        }
-      }
-      sizes.push(size);
-      if (size > bestSize) { bestSize = size; best = id; }
-    }
-    let dropped = 0;
-    for (let c = 0; c < cellCount; c++) {
-      if (walkable[c] && label[c] !== best) { terrain[c] = NaN; blocked[c] = 0; dropped++; }
-    }
-    console.log(`walkable connectivity: ${sizes.length} regions, kept the largest ` +
-                `(${bestSize} cells), dropped ${dropped} marooned cells`);
-  }
+  // Doing that discarded 809 of 1959 cells, and because the mini-map is drawn
+  // from this same collider it erased them from the map too - the plan then
+  // showed one island of a much larger capture, 14 m from where the splat's
+  // mass actually sits, which reads as the map being mispositioned. Reachability
+  // is the router's problem, and it already eases camera clearance and reports
+  // any pair it genuinely cannot join.
 
   let afterFloor = 0, afterBlocked = 0;
   for (let c = 0; c < cellCount; c++) {
@@ -457,7 +464,7 @@ writeFileSync(join(outDir, 'scene.json'), JSON.stringify({
     scale: 1,
   },
   cellSize: CELL,
-  wallThreshold: +wallThreshold.toFixed(4),
+  headroom: HEADROOM,
   bounds: {
     min: [+minX.toFixed(3), 0, +minZ.toFixed(3)],
     max: [+maxX.toFixed(3), 0, +maxZ.toFixed(3)],

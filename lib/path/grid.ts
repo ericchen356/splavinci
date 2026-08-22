@@ -664,3 +664,70 @@ export function resolveCameraRadius(
   }
   return { radius: minimum, relaxed: true, regions: cachedConnectivity(grid, minimum).regions };
 }
+
+/**
+ * Which cells the camera can actually reach, as a mask over the whole grid.
+ *
+ * Deliberately separate from what the map draws. A capture's survey and its
+ * navigable space are different questions, and answering both from one mask
+ * forced a bad trade: prune to the reachable region and the map loses the rest
+ * of the building; keep everything and the router hands back straight-line
+ * hops through walls for pairs it cannot join. The map shows the survey, this
+ * says where a waypoint can usefully go, and the UI can show the difference.
+ *
+ * `origin` seeds the region when given - otherwise the largest one wins, which
+ * is the sane default before any waypoint exists.
+ */
+export function reachableMask(
+  grid: WalkGrid,
+  radius: number,
+  origin?: { col: number; row: number },
+): { mask: Uint8Array; cells: number; regions: number } {
+  const total = grid.cols * grid.rows;
+  const seen = new Uint8Array(total);
+  const ok = (c: number, r: number) => isPassable(grid, c, r, radius);
+
+  const flood = (seedIndex: number, out: Uint8Array): number => {
+    const stack = [seedIndex];
+    out[seedIndex] = 1;
+    let size = 0;
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      size++;
+      const cx = cur % grid.cols;
+      const cz = (cur / grid.cols) | 0;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        if (!ok(nx, nz)) continue;
+        const ni = nz * grid.cols + nx;
+        if (out[ni]) continue;
+        out[ni] = 1;
+        stack.push(ni);
+      }
+    }
+    return size;
+  };
+
+  if (origin && ok(origin.col, origin.row)) {
+    const mask = new Uint8Array(total);
+    const cells = flood(origin.row * grid.cols + origin.col, mask);
+    return { mask, cells, regions: 1 };
+  }
+
+  let best: Uint8Array | null = null;
+  let bestSize = 0;
+  let regions = 0;
+  for (let i = 0; i < total; i++) {
+    if (seen[i]) continue;
+    const c = i % grid.cols;
+    const r = (i / grid.cols) | 0;
+    if (!ok(c, r)) continue;
+    const mask = new Uint8Array(total);
+    const size = flood(i, mask);
+    regions++;
+    for (let k = 0; k < total; k++) if (mask[k]) seen[k] = 1;
+    if (size > bestSize) { bestSize = size; best = mask; }
+  }
+  return { mask: best ?? new Uint8Array(total), cells: bestSize, regions };
+}

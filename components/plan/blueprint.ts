@@ -14,10 +14,13 @@
  * left to the fill.
  */
 
-import { cellIndex, type WalkGrid } from '@/lib/path';
+import { cellIndex, reachableMask, type WalkGrid } from '@/lib/path';
 
 export type PlanColours = {
+  /** Open floor the camera can actually get to. */
   floor: string;
+  /** Open floor cut off from the rest by gaps narrower than the camera. */
+  unreachable: string;
   wall: string;
   outline: string;
   wallOutline: string;
@@ -26,6 +29,10 @@ export type PlanColours = {
 export const DEFAULT_PLAN_COLOURS: PlanColours = {
   // Reads clearly against --bg (#0d0f12) instead of vanishing into it.
   floor: '#1d2b3d',
+  // Visibly surveyed, visibly not somewhere you can send the camera. Left
+  // unpainted it would look identical to unsurveyed space, which is the thing
+  // that made the map read as vague blobs in the first place.
+  unreachable: '#241f2b',
   wall: '#5b6b80',
   outline: '#6ea8fe',
   wallOutline: '#93a7bf',
@@ -105,6 +112,8 @@ export function renderPlanFill(
   grid: WalkGrid,
   extent: ContentExtent,
   colours = DEFAULT_PLAN_COLOURS,
+  /** Cells the camera can reach. Everything else open is drawn as cut off. */
+  reachable?: Uint8Array | null,
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   const w = extent.c1 - extent.c0 + 1;
@@ -118,6 +127,7 @@ export function renderPlanFill(
   const image = ctx.createImageData(w, h);
   const floorRgb = hexToRgb(colours.floor);
   const wallRgb = hexToRgb(colours.wall);
+  const cutOffRgb = hexToRgb(colours.unreachable);
 
   for (let r = extent.r0; r <= extent.r1; r++) {
     for (let c = extent.c0; c <= extent.c1; c++) {
@@ -127,8 +137,9 @@ export function renderPlanFill(
         image.data[p] = wallRgb[0]; image.data[p + 1] = wallRgb[1];
         image.data[p + 2] = wallRgb[2]; image.data[p + 3] = 255;
       } else if (grid.floor[i]) {
-        image.data[p] = floorRgb[0]; image.data[p + 1] = floorRgb[1];
-        image.data[p + 2] = floorRgb[2]; image.data[p + 3] = 255;
+        const rgb = !reachable || reachable[i] ? floorRgb : cutOffRgb;
+        image.data[p] = rgb[0]; image.data[p + 1] = rgb[1];
+        image.data[p + 2] = rgb[2]; image.data[p + 3] = 255;
       } else {
         image.data[p + 3] = 0;
       }
@@ -200,15 +211,34 @@ export type PlanLayer = {
   extent: ContentExtent;
   openOutline: EdgeSegment[];
   wallOutline: EdgeSegment[];
+  /** Cells the camera can reach, if the caller supplied a radius. */
+  reachable: Uint8Array | null;
+  reachableCells: number;
+  regions: number;
 };
 
-export function buildPlanLayer(grid: WalkGrid, colours = DEFAULT_PLAN_COLOURS): PlanLayer {
+export function buildPlanLayer(
+  grid: WalkGrid,
+  colours = DEFAULT_PLAN_COLOURS,
+  /** Camera radius. Omit to treat every open cell as reachable. */
+  radius?: number,
+): PlanLayer {
   const extent = contentExtent(grid);
+  const reach = radius === undefined ? null : reachableMask(grid, radius);
+  const reachable = reach?.mask ?? null;
   return {
-    fill: renderPlanFill(grid, extent, colours),
+    fill: renderPlanFill(grid, extent, colours, reachable),
     extent,
-    openOutline: planOutline(grid, walkable),
+    // Outline the REACHABLE region when we know it: the line is what reads as
+    // the edge of the space, and drawing it around pockets you cannot fly to
+    // advertises rooms that are not on offer.
+    openOutline: planOutline(grid, reachable
+      ? (g, c, r) => walkable(g, c, r) && reachable[cellIndex(g, c, r)] === 1
+      : walkable),
     wallOutline: planOutline(grid, solid),
+    reachable,
+    reachableCells: reach?.cells ?? 0,
+    regions: reach?.regions ?? 0,
   };
 }
 
