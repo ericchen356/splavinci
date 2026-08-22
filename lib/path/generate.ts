@@ -28,14 +28,13 @@ import * as THREE from 'three';
 import type { FrameEntry, PathSettings, ShotType, Vec3, Waypoint } from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
 import {
-  buildWalkGrid,
-  cellToWorld,
   floorYAtCell,
   worldToCell,
   isPassable,
   type GridOptions,
   type WalkGrid,
 } from './grid';
+import { getWalkGrid } from './gridCache';
 import { findPath, simplifyPath, type Cell } from './astar';
 import { buildCurve, easeInOut, DEFAULT_CURVE } from './curve';
 import { sampleShot, vec3, type ShotContext } from './motion';
@@ -141,7 +140,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   });
   const gt0 = now();
   if (!cache.grid || cache.gridKey !== gridKey) {
-    cache.grid = buildWalkGrid(input.collider, opts.grid);
+    cache.grid = getWalkGrid(input.collider, opts.grid);
     cache.gridKey = gridKey;
     // The grid moved under the cached legs, so none of them are valid.
     cache.legs.clear();
@@ -414,10 +413,19 @@ function computeLeg(
     });
   }
 
-  const polyline: Vec3[] = simple.map((c) => {
-    const { x, z } = cellToWorld(grid, c.col, c.row);
-    return [x, floorYAtCell(grid, c.col, c.row, fallbackFloorY), z] as Vec3;
-  });
+  // Sample the finished curve rather than returning the simplified A* nodes:
+  // this is what gets drawn on the floor and on the mini-map, and a polygonal
+  // corner-node line would visibly disagree with the curve the camera flies.
+  const polyline: Vec3[] = [];
+  {
+    const steps = Math.max(2, Math.ceil(built.length / 0.15));
+    const p = new THREE.Vector3();
+    for (let i = 0; i <= steps; i++) {
+      built.curve.getPointAt(i / steps, p);
+      const { col, row } = worldToCell(grid, p.x, p.z);
+      polyline.push([p.x, floorYAtCell(grid, col, row, fallbackFloorY), p.z]);
+    }
+  }
 
   return {
     curve: built.curve,

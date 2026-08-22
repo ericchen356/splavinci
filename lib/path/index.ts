@@ -14,6 +14,8 @@ export {
   type WalkGrid, type GridOptions,
 } from './grid';
 
+export { getWalkGrid } from './gridCache';
+
 export {
   findPath, simplifyPath, DEFAULT_ASTAR,
   type Cell, type AStarOptions, type AStarResult, type AStarFailure,
