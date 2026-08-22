@@ -8,6 +8,10 @@ next-env.d.ts
 .env.*
 !.env.example
 
+# Claude Code: agent definitions are shared project config and ARE committed.
+# Personal, machine-local settings are not.
+.claude/settings.local.json
+
 # large splat captures - keep out of git
 *.spz
 *.ply
