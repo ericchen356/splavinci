@@ -7,6 +7,12 @@
  * tested directly. Comment marks are clickable targets in their own right and
  * are checked before a scrub, so clicking a mark jumps to that comment rather
  * than seeking to wherever the pointer happened to land.
+ *
+ * Drawing the track by hand means the semantics have to be supplied by hand
+ * too: it is a slider, so it says so, takes the arrow keys a slider takes, and
+ * reports its position as a timecode rather than as a float. Without that it
+ * is a div that only a mouse can operate - and the playhead is the one control
+ * on this screen with no keyboard equivalent anywhere else.
  */
 
 import { useCallback, useRef } from 'react';
@@ -24,7 +30,24 @@ export type ScrubBarProps = {
   disabled?: boolean;
 };
 
-const HEIGHT = 34;
+/** Arrow-key step, and the bigger step Shift asks for. Seconds, not frames:
+ *  the user is looking for a moment in a flythrough, not editing a cut. */
+const STEP = 1;
+const STEP_COARSE = 5;
+
+/** Pointer slop around a comment mark. The mark is 2px wide and is the only
+ *  target on the track that is not the track itself. */
+const MARK_GRAB_PX = 6;
+
+/**
+ * Shared by the whole screen so one clock formats every timecode - the badge,
+ * the transport, the comment list and this bar's own spoken position had four
+ * copies of it, and they had already drifted to three different precisions.
+ */
+export function timecode(seconds: number): string {
+  const s = Math.max(0, seconds);
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+}
 
 export function ScrubBar({
   time, duration, segments = [], comments = [], onSeek, onCommentClick, disabled = false,
@@ -54,7 +77,7 @@ export function ScrubBar({
       // A comment mark under the pointer wins over a seek.
       for (const c of comments) {
         const cx = (c.timeSeconds / duration) * rect.width;
-        if (Math.abs(cx - x) <= 6) {
+        if (Math.abs(cx - x) <= MARK_GRAB_PX) {
           onCommentClick?.(c);
           return;
         }
@@ -88,69 +111,86 @@ export function ScrubBar({
     dragging.current = false;
   }, []);
 
+  /* The keys a slider is expected to answer to. Space is deliberately absent:
+     it belongs to the transport, and the review screen binds it there so that
+     it means the same thing wherever focus happens to be. */
+  const onKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!interactive) return;
+      const step = event.shiftKey ? STEP_COARSE : STEP;
+      switch (event.key) {
+        case 'ArrowLeft':
+        case 'ArrowDown': onSeek(time - step); break;
+        case 'ArrowRight':
+        case 'ArrowUp': onSeek(time + step); break;
+        case 'PageDown': onSeek(time - STEP_COARSE); break;
+        case 'PageUp': onSeek(time + STEP_COARSE); break;
+        case 'Home': onSeek(0); break;
+        case 'End': onSeek(duration); break;
+        default: return;
+      }
+      // Only for keys actually handled above: the arrows scroll the sidebar
+      // otherwise, and Tab must stay Tab.
+      event.preventDefault();
+    },
+    [duration, interactive, onSeek, time],
+  );
+
   const pct = duration > 0 ? (Math.min(time, duration) / duration) * 100 : 0;
 
   return (
     <div
       ref={trackRef}
+      className={`review__scrub${duration > 0 ? '' : ' review__scrub--idle'}`}
+      role="slider"
+      aria-label="Playback position"
+      aria-valuemin={0}
+      aria-valuemax={Math.max(0, duration)}
+      aria-valuenow={Math.min(time, Math.max(0, duration))}
+      /* A float of seconds read aloud is not a position in a video. */
+      aria-valuetext={`${timecode(time)} of ${timecode(duration)}`}
+      aria-disabled={disabled || duration <= 0}
+      // Reachable only while there is something to scrub: a slider that
+      // cannot move is a stop on the tab route that answers to nothing.
+      tabIndex={interactive ? 0 : -1}
+      onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onLostPointerCapture={onLostPointerCapture}
-      style={{
-        position: 'relative', height: HEIGHT,
-        cursor: disabled ? 'not-allowed' : duration > 0 ? 'pointer' : 'default',
-        opacity: disabled ? 0.65 : 1,
-        background: 'var(--panel-2)', border: '1px solid var(--line)',
-        borderRadius: 'var(--radius)', overflow: 'hidden', touchAction: 'none',
-      }}
     >
-      {/* shot segments, alternating so the rhythm of the edit is visible */}
+      {/* shot segments, washed so the rhythm of the edit is visible */}
       {duration > 0 && segments.map((s, i) => (
         <div
           key={s.id}
           title={`${s.kind}: ${s.waypointId}`}
+          className={
+            `review__seg${s.kind === 'travel' ? ' review__seg--travel' : ''}` +
+            `${i === 0 ? '' : ' review__seg--split'}`
+          }
           style={{
-            position: 'absolute', top: 0, bottom: 0,
             left: `${(s.startTime / duration) * 100}%`,
             width: `${((s.endTime - s.startTime) / duration) * 100}%`,
-            background: s.kind === 'shot'
-              ? 'rgba(110,168,254,0.16)'
-              : 'rgba(110,168,254,0.05)',
-            borderLeft: i === 0 ? 'none' : '1px solid rgba(110,168,254,0.28)',
           }}
         />
       ))}
 
       {/* elapsed */}
-      <div
-        style={{
-          position: 'absolute', top: 0, bottom: 0, left: 0, width: `${pct}%`,
-          background: 'rgba(110,168,254,0.28)', pointerEvents: 'none',
-        }}
-      />
+      <div className="review__elapsed" style={{ width: `${pct}%` }} />
 
       {/* comment marks */}
       {duration > 0 && comments.map((c) => (
         <div
           key={c.id}
           title={c.text}
-          style={{
-            position: 'absolute', top: 0, bottom: 0,
-            left: `${(c.timeSeconds / duration) * 100}%`,
-            width: 2, marginLeft: -1, background: 'var(--warn)', pointerEvents: 'none',
-          }}
+          className="review__mark"
+          style={{ left: `${(c.timeSeconds / duration) * 100}%` }}
         />
       ))}
 
       {/* playhead */}
-      <div
-        style={{
-          position: 'absolute', top: 0, bottom: 0, left: `${pct}%`,
-          width: 2, marginLeft: -1, background: 'var(--text)', pointerEvents: 'none',
-        }}
-      />
+      <div className="review__head" style={{ left: `${pct}%` }} />
     </div>
   );
 }

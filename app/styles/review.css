@@ -1,0 +1,549 @@
+/* ================================================================
+ * review
+ *
+ * A partial of the one global sheet, split out only so that concurrent work
+ * on separate parts of the app does not contend for a single file. Tokens
+ * live in globals.css and are the only source of colour, spacing and type
+ * here - do not introduce a raw hex, a bare pixel padding or a hand-picked
+ * font size below this line.
+ *
+ * WHY EVERY CLASS CARRIES THE BLOCK PREFIX
+ * Five screens share one stylesheet and one set of shared controls. A name
+ * written loosely here would reach every one of them, so the prefix is not
+ * decoration: it is the only thing keeping this screen's opinions off /plan.
+ * Nothing below overrides a shared control either - the buttons, the disabled
+ * greying and the focus ring all come from globals.css untouched, so a control
+ * here cannot drift away from the same control on the other screens.
+ *
+ * WHY THE PLAYER IS TWO CARDS ON THE GROUND
+ * The render is the thing being judged and the transport is the instrument
+ * judging it. Both sit as white cards on the page ground rather than as one
+ * continuous panel, so the frame has an edge: a viewport bleeding into its own
+ * chrome reads as a hole in the page, and the surround shifts how the exposure
+ * of the image inside it is perceived.
+ *
+ * Motion is handled globally: globals.css drops every transition under
+ * prefers-reduced-motion, so nothing below repeats that media query.
+ * ================================================================ */
+
+.review {
+  display: flex;
+  height: 100%;
+  background: var(--ground);
+}
+
+/* ---------------- player column ---------------- */
+
+.review__player {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--s4);
+  padding: var(--s4);
+}
+
+/* The video frame. Data, not chrome: the render inside keeps its own colours
+   and only the card around it is monochrome. */
+.review__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+
+/* Things floating on the render are opaque, per the note in globals.css: a
+   translucent panel over a moving photoreal render is unreadable on whichever
+   frames happen to be bright, and a backdrop filter costs fill rate on the one
+   canvas in the app that is being captured in real time. */
+.review__assets {
+  position: absolute;
+  top: var(--s3);
+  left: var(--s3);
+  z-index: var(--z-overlay);
+  max-width: 300px;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* Right, not left: the asset panel owns the top-left corner on every screen. */
+.review__rec {
+  position: absolute;
+  top: var(--s3);
+  right: var(--s3);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  height: var(--h-control);
+  padding: 0 var(--s4);
+  font-size: var(--fs-2);
+  color: var(--danger);
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-1);
+}
+
+.review__rec-dot {
+  flex: none;
+  width: var(--s2);
+  height: var(--s2);
+  background: var(--danger);
+  border-radius: var(--r-pill);
+}
+
+.review__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s4);
+  padding: var(--s6);
+  text-align: center;
+  font-size: var(--fs-3);
+  color: var(--muted);
+}
+
+/* ---------------- transport ---------------- */
+
+.review__transport {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+}
+
+/* The scrub bar and the shot strip are one object - the strip is a legend for
+   the track above it - so they sit closer to each other than to anything else
+   in the card. */
+.review__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+/* ---------------- scrub bar ---------------- */
+
+/* Exactly one control height across the whole card: the track, the buttons and
+   the shot chips are all --h-control with --r-sm corners, so the transport
+   reads as one instrument rather than three rows of unrelated widgets. */
+.review__scrub {
+  position: relative;
+  height: var(--h-control);
+  overflow: hidden;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  /* A touch drag has to scrub, not scroll the page. */
+  touch-action: none;
+  transition: background var(--t-mid) var(--ease-out),
+    border-color var(--t-mid) var(--ease-out);
+}
+
+/* --press, not the --hover the buttons use: those rest on white, and this
+   track rests on the sunk grey, over which the lighter wash would read as the
+   track brightening when the pointer arrives. Same direction as every other
+   control, same size of step. */
+.review__scrub:hover {
+  background: var(--press);
+  border-color: var(--line-strong);
+}
+
+/* No path yet: still drawn, so the transport does not change shape when one
+   arrives, but there is nowhere to seek to. */
+.review__scrub--idle,
+.review__scrub--idle:hover {
+  cursor: default;
+  background: var(--surface-sunk);
+  border-color: var(--line);
+}
+
+/* Locked by a running capture, not broken - the cursor says so on the way in
+   and the transport's own line says why. */
+.review__scrub[aria-disabled='true'],
+.review__scrub[aria-disabled='true']:hover {
+  cursor: not-allowed;
+  opacity: 0.55;
+  background: var(--surface-sunk);
+  border-color: var(--line);
+}
+
+.review__scrub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The edit, made visible: shots are washed and travel is left empty, so the
+   rhythm of the cut is legible without a second colour. */
+.review__seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--hover);
+  pointer-events: none;
+}
+
+.review__seg--travel {
+  background: transparent;
+}
+
+.review__seg--split {
+  border-left: 1px solid var(--line);
+}
+
+.review__elapsed {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--line-strong);
+  pointer-events: none;
+}
+
+/* An annotation, not chrome: it is one of the few things on this screen that
+   is allowed a hue, because it marks a place someone left a note. */
+.review__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+  pointer-events: none;
+}
+
+.review__head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* ---------------- shot strip ---------------- */
+
+.review__strip {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  overflow-x: auto;
+  /* The chips carry a focus ring at 2px offset; without room for it the ring
+     is clipped by the scroll container the moment one is tabbed to. */
+  padding: var(--s1) 0;
+}
+
+.review__chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: var(--s2);
+  min-height: var(--h-control);
+  padding: 0 var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 450;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  background: var(--control);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--t-mid) var(--ease-out),
+    border-color var(--t-mid) var(--ease-out), color var(--t-mid) var(--ease-out);
+}
+
+.review__chip:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+  border-color: var(--line-strong);
+}
+
+/* Selected is an ink border and weight, never a colour. */
+.review__chip[aria-current='true'],
+.review__chip[aria-pressed='true'] {
+  color: var(--ink);
+  font-weight: 650;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+
+/* Nothing here for :disabled on purpose - the shared button rule greys the
+   fill and the label, and a second treatment on top of it only makes this one
+   control disabled in a way no other control on the screen is. */
+
+/* The numbered step. Tabular, because these sit in a row and a 1 that is
+   narrower than a 4 makes the row of chips ripple as the playhead moves. */
+.review__chip-n {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--s5);
+  height: var(--s5);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  color: var(--muted);
+  background: var(--surface-sunk);
+  border-radius: var(--r-xs);
+}
+
+.review__chip[aria-current='true'] .review__chip-n {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.review__chip-meta {
+  color: var(--muted);
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+/* ---------------- controls row ---------------- */
+
+.review__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+/* Wide enough for the longer of its two labels, so the whole row does not
+   shift sideways every time the transport is toggled. */
+.review__play {
+  min-width: 9ch;
+}
+
+.review__glyph {
+  font-size: var(--fs-1);
+  line-height: 1;
+}
+
+/* Elapsed is the reading; the total is the scale it is read against. Bold ink
+   next to grey metadata says which is which without a label. */
+.review__time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s1);
+  padding: 0 var(--s2);
+  font-size: var(--fs-3);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+}
+
+.review__time-now {
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.review__time-total {
+  font-size: var(--fs-2);
+  color: var(--muted);
+}
+
+/* ---------------- keyboard hints ---------------- */
+
+.review__hints {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+
+.review__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* A keycap, same rounded-square language as the numbered step chips - these
+   are the two places on the screen where a glyph stands for a thing you press
+   rather than for a thing you read. */
+.review__key {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--s6);
+  height: var(--s5);
+  padding: 0 var(--s1);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  line-height: 1;
+  color: var(--ink-soft);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+}
+
+/* ---------------- inline messages ---------------- */
+
+.review__note {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.review__note-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Only a genuine fault gets a hue. "Regenerating…" is ordinary operation and
+   is left in the quiet default. */
+.review__note[data-tone='warn'] {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+}
+
+.review__note[data-tone='danger'] {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+}
+
+.review__msg {
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.review__msg[data-tone='danger'] {
+  color: var(--danger);
+}
+
+/* ---------------- sidebar ---------------- */
+
+.review__side {
+  flex: 0 0 var(--w-sidebar);
+  width: var(--w-sidebar);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding: var(--s5);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.review__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+/* Sentence case, not shouted caps: the weight already marks it as a heading,
+   and letter-spaced uppercase is measurably slower to read. */
+.review__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.review__count {
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  color: var(--muted);
+}
+
+/* The map is data too. It draws its own dark silhouette of the walkable
+   region on a transparent ground, so it needs a well of its own rather than
+   being left to float on the white panel. */
+.review__map {
+  overflow: hidden;
+  padding: var(--s2);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.review__comment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: border-color var(--t-mid) var(--ease-out),
+    background var(--t-mid) var(--ease-out);
+}
+
+.review__comment:hover {
+  border-color: var(--line-strong);
+}
+
+.review__comment-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.review__comment-text {
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.review__comments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+/* The composer's own textarea, sunk into the tile it sits in rather than
+   drawn as a second card inside it. */
+.review__composer textarea {
+  display: block;
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  font: inherit;
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  resize: vertical;
+}
+
+.review__composer textarea::placeholder {
+  color: var(--muted);
+}
+
+.review__actions {
+  display: flex;
+  gap: var(--s2);
+}

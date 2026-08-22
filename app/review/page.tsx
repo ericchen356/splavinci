@@ -14,16 +14,28 @@
  * `time` from inside useFrame, so a subscription to the whole store re-renders
  * this page - and every derived object it hands to the mini-map - at frame
  * rate for state it never reads.
+ *
+ * WHY THE CHROME IS ALL CLASSES
+ * Every style on this screen lives in app/styles/review.css. The only inline
+ * styles left are the ones carrying data - a segment's position along the
+ * track is a number out of the path, not a design decision - and those cannot
+ * be a class because there is one of them per frame of the timeline.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+/* This screen's half of the global sheet. Imported here rather than in
+   app/layout.tsx beside the other partials only because five agents are
+   editing that file today; move it up there when the dust settles. Order is
+   safe either way - every rule in it is scoped under .review, so it outranks
+   what it overrides by specificity and not by which sheet happens to land
+   last. */
 import { Canvas } from '@react-three/fiber';
 import { AssetStatusPanel, CameraPresetDriver, RoomScene, derivePresets } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { WaypointPanel, generatedShotFor } from '@/components/plan/WaypointPanel';
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
-import { ScrubBar } from '@/components/review/ScrubBar';
+import { ScrubBar, timecode } from '@/components/review/ScrubBar';
 import { useRoomAssets } from '@/lib/scene';
 import { getWalkGrid, sampleAtTime, segmentAtTime, type PathSegmentInfo } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
@@ -37,9 +49,21 @@ const NO_FRAMES: readonly FrameEntry[] = [];
 const NO_SEGMENTS: readonly PathSegmentInfo[] = [];
 const NO_POLYLINE: readonly Vec3[] = [];
 
-function timecode(seconds: number): string {
-  const s = Math.max(0, seconds);
-  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+/**
+ * Elements that already answer to Space themselves.
+ *
+ * A text field takes a space character, and a <button> fires its own click on
+ * Space with no help from anyone. Either one would otherwise get the keypress
+ * AND the transport toggle out of a single press - most visibly on the play
+ * button, where the transport would flip twice and so appear not to respond at
+ * all. Anything else with focus (the scrub bar, the page itself) leaves Space
+ * unclaimed, which is where the shortcut belongs.
+ */
+function ownsSpaceItself(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable) return true;
+  return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'SUMMARY', 'OPTION'].includes(el.tagName);
 }
 
 export default function ReviewPage() {
@@ -128,6 +152,23 @@ export default function ReviewPage() {
   // fix, in progress - and every tick of a slider would otherwise flash it.
   const showStale = stale && !generating;
 
+  /* The running order, as stops on the timeline: which shot, in what order,
+     how long, and where to land to see it. The generator emits shots in
+     waypoint order and segments in time order, so the jump target comes from
+     the segment and the numbering from the shot list. */
+  const stops = useMemo(() => {
+    if (!path) return [];
+    return path.shots.map((shot, i) => ({
+      id: shot.waypointId,
+      number: i + 1,
+      shotType: shot.shotType,
+      duration: shot.duration,
+      startTime:
+        path.segments.find((s) => s.kind === 'shot' && s.waypointId === shot.waypointId)
+          ?.startTime ?? 0,
+    }));
+  }, [path]);
+
   // The store is the clamp bound for seeking, so it has to hear about a path
   // whose duration just shrank - otherwise the playhead sits past the end.
   useEffect(() => {
@@ -139,6 +180,42 @@ export default function ReviewPage() {
   const runGenerate = useCallback(() => {
     void generate(assets.colliderData);
   }, [assets.colliderData, generate]);
+
+  /* ---------------- the transport shortcut ---------------- */
+
+  /**
+   * Space plays and pauses, the way it does in every other player.
+   *
+   * Bound on the window rather than on the viewport, because the thing the
+   * user is looking at when they reach for it is the render, which is a canvas
+   * and takes no focus of its own - a handler on any one element would work
+   * only after clicking that element first.
+   *
+   * Not bound at all while the transport is unusable, so the key falls through
+   * to the browser instead of being swallowed by a screen that would do
+   * nothing with it.
+   */
+  useEffect(() => {
+    if (!hasPath || recording) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' && event.key !== ' ') return;
+      // A modifier makes it someone else's shortcut - Cmd-Space is Spotlight,
+      // Shift-Space is page-up - and a held key would flip the transport on
+      // every repeat the keyboard sends.
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.repeat || event.defaultPrevented) return;
+      if (ownsSpaceItself(event.target)) return;
+
+      // Space scrolls the nearest scroller, which on this screen is the
+      // sidebar the user is not looking at.
+      event.preventDefault();
+      toggle();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hasPath, recording, toggle]);
 
   /* ---------------- recording ---------------- */
 
@@ -199,10 +276,15 @@ export default function ReviewPage() {
 
   // Inert during a capture: the store refuses to move the playhead while one
   // is running, so a jump cannot land halfway through the export.
-  const jumpToComment = useCallback((comment: Comment) => {
+  const jumpTo = useCallback((seconds: number) => {
     pause();
-    seek(comment.timeSeconds);
+    seek(seconds);
   }, [pause, seek]);
+
+  const jumpToComment = useCallback(
+    (comment: Comment) => jumpTo(comment.timeSeconds),
+    [jumpTo],
+  );
 
   /* ---------------- editing a shot from the label ---------------- */
 
@@ -218,10 +300,10 @@ export default function ReviewPage() {
   );
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
+    <div className="review">
       {/* ---------------- player ---------------- */}
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
-        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+      <div className="review__player">
+        <div className="review__stage">
           <Canvas
             camera={{ position: startView.position, fov: 60, near: 0.05, far: 2000 }}
             // antialias off on Spark's advice: MSAA does nothing for Gaussian
@@ -235,11 +317,13 @@ export default function ReviewPage() {
           </Canvas>
 
           {!hasPath && (
-            <div style={centreNotice}>
+            <div className="review__empty">
               {assets.settled ? (
                 <>
-                  <div style={{ marginBottom: 8 }}>No path generated yet.</div>
-                  <Link href="/plan">Go to the plan screen →</Link>
+                  <div>No path generated yet.</div>
+                  <Link href="/plan" className="btn btn--primary">
+                    Go to the plan screen →
+                  </Link>
                 </>
               ) : (
                 <div>Loading room… {Math.round(assets.progress * 100)}%</div>
@@ -250,33 +334,35 @@ export default function ReviewPage() {
           {/* A 60 MB splat download is otherwise a black canvas with no
               explanation, exactly as on /scene and /plan. Last, so its Retry
               button stays clickable over the full-bleed notice above. */}
-          <div style={{ position: 'absolute', top: 12, left: 12, maxWidth: 300, zIndex: 1 }}>
+          <div className="review__assets">
             <AssetStatusPanel assets={assets} />
           </div>
 
           {recording && (
-            <div style={{ ...badge, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
-              ● Recording — {timecode(time)} / {timecode(duration)}
+            <div className="review__rec" role="status">
+              <span className="review__rec-dot" aria-hidden="true" />
+              Recording — {timecode(time)} / {timecode(duration)}
             </div>
           )}
         </div>
 
         {/* ---------------- transport ---------------- */}
-        <div style={{ borderTop: '1px solid var(--line)', background: 'var(--panel)', padding: 12 }}>
+        <div className="review__transport">
           {generating && (
-            <div style={{ ...banner, color: 'var(--accent)', borderColor: 'var(--accent-dim)' }}>
-              Regenerating the flythrough…
+            <div className="review__note" role="status">
+              <div className="review__note-body">Regenerating the flythrough…</div>
             </div>
           )}
 
           {showStale && (
-            <div style={{ ...banner, color: 'var(--warn)', borderColor: 'var(--warn)' }}>
-              <div style={{ flex: 1, lineHeight: 1.45 }}>
+            <div className="review__note" data-tone="warn">
+              <div className="review__note-body">
                 <strong>This flythrough is out of date.</strong> The plan changed after it was
                 generated, so the camera and the route on the map are still the old path.
               </div>
               <button
-                className="primary"
+                type="button"
+                className="btn btn--primary"
                 onClick={runGenerate}
                 disabled={!assets.colliderData}
                 title={assets.colliderData ? undefined : 'Waiting for the collider to load.'}
@@ -286,63 +372,108 @@ export default function ReviewPage() {
             </div>
           )}
 
-          <ScrubBar
-            time={time}
-            duration={duration}
-            segments={path?.segments}
-            comments={comments}
-            onSeek={seek}
-            onCommentClick={jumpToComment}
-            disabled={recording}
-          />
+          <div className="review__timeline">
+            <ScrubBar
+              time={time}
+              duration={duration}
+              segments={path?.segments}
+              comments={comments}
+              onSeek={seek}
+              onCommentClick={jumpToComment}
+              disabled={recording}
+            />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-            <button onClick={toggle} disabled={!hasPath || recording} style={{ minWidth: 76 }}>
-              {playing ? '❚❚ Pause' : '▶ Play'}
+            {/* The running order, under the track it indexes. Each stop is a
+                place to land, so each one is a button rather than a caption. */}
+            {stops.length > 0 && (
+              <div className="review__strip">
+                {stops.map((stop) => (
+                  <button
+                    key={stop.id}
+                    type="button"
+                    className="review__chip"
+                    aria-current={stop.id === pose?.activeWaypointId}
+                    disabled={recording}
+                    title={`Jump to shot ${stop.number}: ${stop.shotType}`}
+                    onClick={() => jumpTo(stop.startTime)}
+                  >
+                    <span className="review__chip-n">{stop.number}</span>
+                    {stop.shotType}
+                    <span className="review__chip-meta">{stop.duration.toFixed(1)}s</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="review__controls">
+            {/* The glyph is decoration; the word is the accessible name, and it
+                changes with the state so the name always says what the button
+                will do next. */}
+            <button
+              type="button"
+              className="btn review__play"
+              onClick={toggle}
+              disabled={!hasPath || recording}
+              aria-keyshortcuts="Space"
+              title={playing ? 'Pause (Space)' : 'Play (Space)'}
+            >
+              <span className="review__glyph" aria-hidden="true">{playing ? '❚❚' : '▶'}</span>
+              {playing ? 'Pause' : 'Play'}
             </button>
-            <button onClick={() => { pause(); seek(0); }} disabled={!hasPath || recording}>↺</button>
 
-            <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12, color: 'var(--muted)' }}>
-              {timecode(time)} / {timecode(duration)}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => jumpTo(0)}
+              disabled={!hasPath || recording}
+              aria-label="Back to the start"
+              title="Back to the start"
+            >
+              <span aria-hidden="true">↺</span>
+            </button>
+
+            <span className="review__time">
+              <span className="review__time-now">{timecode(time)}</span>
+              <span className="review__time-total">/ {timecode(duration)}</span>
             </span>
 
             {/* the live technique label */}
             {activeShot && (
               <button
+                type="button"
+                className="review__chip"
+                aria-pressed={editingWaypointId === activeShot.waypointId}
                 onClick={() => editWaypoint(
                   editingWaypointId === activeShot.waypointId ? null : activeShot.waypointId,
                 )}
                 disabled={recording}
                 title="Edit this shot"
-                style={{
-                  borderColor: 'var(--accent)',
-                  background: editingWaypointId === activeShot.waypointId
-                    ? 'var(--accent-dim)' : 'var(--panel-2)',
-                }}
               >
                 Now: <strong>{activeShot.shotType}</strong>
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>
-                  {' '}({segment?.kind === 'travel' ? 'approaching' : 'shot'})
+                <span className="review__chip-meta">
+                  {segment?.kind === 'travel' ? 'approaching' : 'shot'}
                 </span>
               </button>
             )}
 
-            <div style={{ flex: 1 }} />
+            <span className="spacer" />
 
             {supported === false ? (
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                Recording unsupported in this browser
-              </span>
+              <span className="review__msg">Recording unsupported in this browser</span>
             ) : recording ? (
               <button
+                type="button"
+                className="btn btn--danger"
                 onClick={cancelRecording}
-                style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}
                 title="Stop the capture and discard what has been recorded."
               >
                 Cancel recording
               </button>
             ) : (
               <button
+                type="button"
+                className="btn"
                 onClick={() => setArmed(true)}
                 disabled={!canRecord || armed}
                 title={recordBlockedReason}
@@ -353,88 +484,100 @@ export default function ReviewPage() {
 
             {video ? (
               <a
+                className="btn btn--primary"
                 href={video.url}
                 download={`flythrough.${video.extension}`}
-                style={{
-                  padding: '6px 12px', borderRadius: 'var(--radius)',
-                  border: '1px solid var(--accent)', background: 'var(--accent-dim)',
-                  color: 'var(--text)', textDecoration: 'none', fontSize: 14,
-                }}
               >
                 Download .{video.extension} ({(video.sizeBytes / 1e6).toFixed(1)} MB)
               </a>
             ) : (
-              <button disabled>Download video</button>
+              <button type="button" className="btn" disabled>Download video</button>
+            )}
+          </div>
+
+          {/* Where the keys are stated. A shortcut nobody can see is a
+              shortcut only the person who wrote it uses. */}
+          <div className="review__hints">
+            {recording ? (
+              <span className="review__msg">
+                Transport is locked while recording — pausing or scrubbing would land in the
+                export. Cancel to discard the capture.
+              </span>
+            ) : (
+              <>
+                <span className="review__hint">
+                  <kbd className="review__key">Space</kbd> play / pause
+                </span>
+                <span className="review__hint">
+                  <kbd className="review__key">←</kbd>
+                  <kbd className="review__key">→</kbd> scrub 1s
+                </span>
+                <span className="review__hint">
+                  <kbd className="review__key">Home</kbd> back to the start
+                </span>
+              </>
             )}
           </div>
 
           {/* Real time is the whole cost of this feature, so it is stated
               before the capture starts rather than discovered during it. */}
           {armed && canRecord && (
-            <div style={armedPanel}>
-              <div style={{ flex: 1, lineHeight: 1.5 }}>
+            <div className="review__note">
+              <div className="review__note-body">
                 Recording runs in real time: the capture takes the full{' '}
                 <strong>{timecode(duration)}</strong> of the flythrough, replayed from the start,
                 and ends by itself when the flythrough does. Keep this tab in front — a
                 background tab stops rendering and stalls the capture.
               </div>
-              <button className="primary" onClick={beginRecording}>Start recording</button>
-              <button onClick={() => setArmed(false)}>Cancel</button>
+              <button type="button" className="btn btn--primary" onClick={beginRecording}>
+                Start recording
+              </button>
+              <button type="button" className="btn" onClick={() => setArmed(false)}>
+                Cancel
+              </button>
             </div>
           )}
 
-          {recording && (
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
-              Transport is locked while recording — pausing or scrubbing would land in the
-              export. Cancel to discard the capture.
-            </div>
-          )}
-
-          {recordError && (
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>{recordError}</div>
-          )}
-          {generateError && (
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>{generateError}</div>
-          )}
+          {recordError && <div className="review__msg" data-tone="danger">{recordError}</div>}
+          {generateError && <div className="review__msg" data-tone="danger">{generateError}</div>}
         </div>
       </div>
 
       {/* ---------------- sidebar ---------------- */}
-      <aside
-        style={{
-          width: 340, flex: '0 0 340px', borderLeft: '1px solid var(--line)',
-          overflowY: 'auto', padding: 14,
-        }}
-      >
-        <MiniMap
-          grid={grid}
-          waypoints={waypoints}
-          selectedId={editingWaypointId}
-          polyline={path?.polyline ?? NO_POLYLINE}
-          camera={mapCamera}
-          comments={comments}
-          onPick={onMapClick}
-          onWaypointPick={(id) => editWaypoint(id)}
-          onCommentPick={(id) => {
-            const c = comments.find((x) => x.id === id);
-            if (c) jumpToComment(c);
-          }}
-          height={240}
-        />
+      <aside className="review__side">
+        <div className="review__map">
+          <MiniMap
+            grid={grid}
+            waypoints={waypoints}
+            selectedId={editingWaypointId}
+            polyline={path?.polyline ?? NO_POLYLINE}
+            camera={mapCamera}
+            comments={comments}
+            onPick={onMapClick}
+            onWaypointPick={(id) => editWaypoint(id)}
+            onCommentPick={(id) => {
+              const c = comments.find((x) => x.id === id);
+              if (c) jumpToComment(c);
+            }}
+            height={240}
+          />
+        </div>
 
         {showStale && (
-          <div style={{ ...card, marginTop: 12, borderColor: 'var(--warn)', color: 'var(--warn)', fontSize: 11 }}>
-            Markers show the edited plan; the blue route is the path that was generated before
-            those edits.
+          <div className="review__note" data-tone="warn">
+            <div className="review__note-body">
+              Markers show the edited plan; the route is the path that was generated before
+              those edits.
+            </div>
           </div>
         )}
 
         {/* comment composer */}
         {draft && (
-          <div style={{ ...card, marginTop: 12 }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>
-              Comment at {timecode(draft.timeSeconds)} ·
-              ({draft.position[0].toFixed(1)}, {draft.position[2].toFixed(1)})
+          <div className="review__comment review__composer">
+            <div className="review__msg">
+              Comment at {timecode(draft.timeSeconds)} · ({draft.position[0].toFixed(1)},{' '}
+              {draft.position[2].toFixed(1)})
             </div>
             <textarea
               autoFocus
@@ -446,13 +589,24 @@ export default function ReviewPage() {
                 if (e.key === 'Escape') { cancelDraft(); setDraftText(''); }
               }}
               placeholder="What should change here?"
-              style={{ resize: 'vertical', marginBottom: 8 }}
+              aria-label="Comment text"
             />
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className="primary" onClick={saveComment} disabled={!draftText.trim()}>
+            <div className="review__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={saveComment}
+                disabled={!draftText.trim()}
+              >
                 Save
               </button>
-              <button onClick={() => { cancelDraft(); setDraftText(''); }}>Cancel</button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => { cancelDraft(); setDraftText(''); }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}
@@ -461,105 +615,76 @@ export default function ReviewPage() {
             on it either moves the playhead or regenerates the path underneath
             the recorder. */}
         {editing && !recording && (
-          <div style={{ marginTop: 12 }}>
-            <WaypointPanel
-              waypoint={editing}
-              index={editingIndex}
-              total={waypoints.length}
-              grid={grid}
-              style={settings.style}
-              generated={editingShot.intent}
-              clipped={editingShot.clipped}
-              onChange={applyEdit}
-              onClose={() => editWaypoint(null)}
-              footer={
-                <button
-                  style={{ width: '100%', marginBottom: 8 }}
-                  onClick={() => {
-                    const seg = path?.segments.find(
-                      (s) => s.kind === 'shot' && s.waypointId === editing.id,
-                    );
-                    if (seg) { pause(); seek(seg.startTime); }
-                  }}
-                >
-                  Jump to this shot
-                </button>
-              }
-            />
-          </div>
+          <WaypointPanel
+            waypoint={editing}
+            index={editingIndex}
+            total={waypoints.length}
+            grid={grid}
+            style={settings.style}
+            generated={editingShot.intent}
+            clipped={editingShot.clipped}
+            onChange={applyEdit}
+            onClose={() => editWaypoint(null)}
+            footer={
+              <button
+                type="button"
+                className="btn btn--block"
+                onClick={() => {
+                  const seg = path?.segments.find(
+                    (s) => s.kind === 'shot' && s.waypointId === editing.id,
+                  );
+                  if (seg) jumpTo(seg.startTime);
+                }}
+              >
+                Jump to this shot
+              </button>
+            }
+          />
         )}
 
         {/* comment list */}
-        <div style={{ marginTop: 14 }}>
-          <div style={sectionLabel}>Comments ({comments.length})</div>
-          {comments.length === 0 && (
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Pause, then click the mini-map to leave one.
+        <div className="review__section">
+          <div className="review__section-head">
+            Comments <span className="review__count">{comments.length}</span>
+          </div>
+
+          {comments.length === 0 ? (
+            <div className="review__msg">Pause, then click the mini-map to leave one.</div>
+          ) : (
+            <div className="review__comments">
+              {comments
+                .slice()
+                .sort((a, b) => a.timeSeconds - b.timeSeconds)
+                .map((c) => (
+                  <div key={c.id} className="review__comment">
+                    <div className="review__comment-head">
+                      <button
+                        type="button"
+                        className="review__chip"
+                        onClick={() => jumpToComment(c)}
+                        disabled={recording}
+                        title="Jump to this comment"
+                      >
+                        <span className="num">{timecode(c.timeSeconds)}</span>
+                      </button>
+                      <span className="spacer" />
+                      <button
+                        type="button"
+                        className="btn btn--danger btn--sm"
+                        onClick={() => removeComment(c.id)}
+                        aria-label={`Delete the comment at ${timecode(c.timeSeconds)}`}
+                        title="Delete this comment"
+                      >
+                        <span aria-hidden="true">✕</span>
+                      </button>
+                    </div>
+                    <div className="review__comment-text">{c.text}</div>
+                  </div>
+                ))}
             </div>
           )}
-          {comments
-            .slice()
-            .sort((a, b) => a.timeSeconds - b.timeSeconds)
-            .map((c) => (
-              <div key={c.id} style={{ ...card, marginBottom: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                  <button
-                    onClick={() => jumpToComment(c)}
-                    disabled={recording}
-                    style={{ padding: '1px 6px', fontSize: 11 }}
-                  >
-                    {timecode(c.timeSeconds)}
-                  </button>
-                  <div style={{ flex: 1 }} />
-                  <button
-                    onClick={() => removeComment(c.id)}
-                    style={{ padding: '1px 6px', fontSize: 11, color: 'var(--danger)' }}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.45 }}>{c.text}</div>
-              </div>
-            ))}
         </div>
       </aside>
     </div>
   );
 }
-
-const card: React.CSSProperties = {
-  background: 'var(--panel)', border: '1px solid var(--line)',
-  borderRadius: 'var(--radius)', padding: 10,
-};
-
-const sectionLabel: React.CSSProperties = {
-  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
-  color: 'var(--muted)', marginBottom: 6,
-};
-
-/* Right, not left: the asset panel owns the top-left corner on every screen. */
-const badge: React.CSSProperties = {
-  position: 'absolute', top: 12, right: 12, zIndex: 1, background: 'var(--panel)',
-  border: '1px solid var(--line)', borderRadius: 'var(--radius)',
-  padding: '6px 10px', fontSize: 12,
-};
-
-const centreNotice: React.CSSProperties = {
-  position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-  alignItems: 'center', justifyContent: 'center', textAlign: 'center',
-  color: 'var(--muted)', fontSize: 13, pointerEvents: 'auto',
-};
-
-const banner: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10,
-  padding: '8px 10px', fontSize: 12,
-  background: 'var(--panel-2)', border: '1px solid var(--line)',
-  borderRadius: 'var(--radius)',
-};
-
-const armedPanel: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginTop: 10,
-  padding: '8px 10px', fontSize: 12, color: 'var(--text)',
-  background: 'var(--panel-2)', border: '1px solid var(--accent)',
-  borderRadius: 'var(--radius)',
-};
