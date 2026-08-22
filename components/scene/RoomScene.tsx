@@ -10,7 +10,7 @@
  * the room.
  *
  *   <Canvas>
- *     <CameraRig mode="orbit" />
+ *     <CameraRig />
  *     <RoomScene onFloorClick={place}>
  *       <MyWaypointGizmos />
  *     </RoomScene>

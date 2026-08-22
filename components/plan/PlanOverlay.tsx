@@ -171,5 +171,29 @@ function makeOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | n
   ctx.textBaseline = 'middle';
   ctx.fillText(String(n), size / 2, size / 2 + 1);
 
-  return new THREE.CanvasTexture(canvas);
+  const texture = new THREE.CanvasTexture(canvas);
+
+  /* Why the number is not simply drawn and left alone.
+   *
+   * A canvas's first row is its TOP; a GL texture's first row is what UV v=0
+   * samples, which is the BOTTOM of the sprite quad. three bridges that with
+   * texture.flipY, default true, by asking the driver for UNPACK_FLIP_Y_WEBGL
+   * at upload - and it asks through WebGLState.pixelStorei, which caches the
+   * last value it set. Spark writes its ordering and LOD index textures with
+   * raw `gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)` calls straight on the
+   * context (spark.module.js x3) and never calls renderer.resetState(), so
+   * three's cache says "already true" while the driver is actually on false.
+   * The flip three thinks it requested silently never happens and the glyph
+   * uploads bottom-up: the badge renders upside down.
+   *
+   * So flipY is not something to rely on here. Spark only ever forces the
+   * unpack flip OFF, which makes flipY=false the one value the upload is
+   * guaranteed to honour; the row order is then corrected in the map's own UV
+   * transform, which lives in the shader and cannot be desynchronised by
+   * anything outside three. Correct with or without Spark in the scene. */
+  texture.flipY = false;
+  texture.repeat.set(1, -1);
+  texture.offset.set(0, 1);
+
+  return texture;
 }

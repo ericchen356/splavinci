@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import type { ShotType, Vec3 } from '@/lib/types';
+import type { PanSector, ShotType, Vec3 } from '@/lib/types';
 import { easeInOut } from './curve';
 
 export type ShotContext = {
@@ -27,6 +27,8 @@ export type ShotContext = {
   intensity: number;
   /** True when `target` is a real point to frame rather than the anchor itself. */
   hasTarget: boolean;
+  /** Explicit arc for a pan, in absolute bearings. Null derives one. */
+  panSector?: PanSector | null;
 };
 
 export type CameraSample = { position: THREE.Vector3; lookAt: THREE.Vector3 };
@@ -39,6 +41,18 @@ const AMPLITUDE = {
   pullBackFraction: 0.45,
   riseHeight: 1.4,
   dollyLength: 1.8,
+  /**
+   * Slow translation carried through a pan, in metres at intensity 1.
+   *
+   * A pan is nominally rotation only, and a locked-off camera between two
+   * moves is exactly what reads as robotic: the flythrough becomes static,
+   * move, static, move, and no amount of easing rescues a shot that does not
+   * move. Half a metre over several seconds is far too slow to read as a
+   * dolly - it reads as the camera being alive - and it keeps velocity
+   * continuous into the legs either side instead of stopping dead at both.
+   * `hold` is deliberately excluded: holding still is its entire purpose.
+   */
+  panDrift: 0.55,
   minTargetRadius: 0.9,
   // Past this an "orbit" stops reading as a move around a subject and starts
   // reading as the camera relocating across the room.
@@ -126,13 +140,36 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
     case 'pan': {
       // Camera stays put; the look direction sweeps.
-      const base = hasTarget ? toTarget.clone() : ctx.tangent.clone().multiplyScalar(radius);
-      if (base.lengthSq() < 1e-6) base.set(0, 0, radius);
+      const distance = Math.max(radius, AMPLITUDE.minTargetRadius);
+
+      // An explicit sector is taken verbatim - it is the whole point of the
+      // control, so intensity does not narrow it.
+      // Drift gently along the route so the camera is never dead still.
+      const drift = ctx.tangent.lengthSq() > 1e-6
+        ? ctx.tangent.clone().normalize()
+        : new THREE.Vector3(0, 0, 1);
+      const travelled = AMPLITUDE.panDrift * k * (t - 0.5);
+      const eye = anchor.clone().addScaledVector(drift, travelled);
+
+      if (ctx.panSector) {
+        const angle = ctx.panSector.from + ctx.panSector.sweep * t;
+        return {
+          position: eye,
+          lookAt: new THREE.Vector3(
+            eye.x + Math.cos(angle) * distance,
+            target.y,
+            eye.z + Math.sin(angle) * distance,
+          ),
+        };
+      }
+
+      const base = hasTarget ? toTarget.clone() : ctx.tangent.clone().multiplyScalar(distance);
+      if (base.lengthSq() < 1e-6) base.set(0, 0, distance);
       const angle = (t - 0.5) * AMPLITUDE.panSweep * k;
       const swept = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
       return {
-        position: anchor.clone(),
-        lookAt: new THREE.Vector3(anchor.x + swept.x, target.y, anchor.z + swept.z),
+        position: eye,
+        lookAt: new THREE.Vector3(eye.x + swept.x, target.y, eye.z + swept.z),
       };
     }
 

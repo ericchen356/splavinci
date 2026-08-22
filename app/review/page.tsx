@@ -87,8 +87,8 @@ export default function ReviewPage() {
   // that - but "before" is most of the time on a first visit, so it is framed
   // from the collider rather than from numbers that fit the sample flat.
   const startView = useMemo(
-    () => derivePresets(assets.roomBounds, assets.floor.baseY)[0],
-    [assets.roomBounds, assets.floor],
+    () => derivePresets(assets.roomBounds, assets.floor.baseY, grid)[0],
+    [assets.roomBounds, assets.floor, grid],
   );
   const [startNonce, setStartNonce] = useState(0);
   useEffect(() => {

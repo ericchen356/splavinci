@@ -15,12 +15,11 @@ import {
   CameraRig,
   CameraPresetDriver,
   derivePresets,
-  type CameraMode,
   type CameraPreset,
 } from '@/components/scene/CameraRig';
 import { AssetStatusPanel } from '@/components/scene/AssetStatusPanel';
 import { useRoomAssets } from '@/lib/scene/useRoomAssets';
-import { denseBounds, getWalkGrid } from '@/lib/path';
+import { getWalkGrid } from '@/lib/path';
 import type { Vec3 } from '@/lib/types';
 
 
@@ -28,24 +27,26 @@ import type { Vec3 } from '@/lib/types';
 export default function ScenePage() {
   const assets = useRoomAssets();
 
-  const [mode, setMode] = useState<CameraMode>('orbit');
   const [presetId, setPresetId] = useState('interior');
   const [presetNonce, setPresetNonce] = useState(0);
   const [showSplat, setShowSplat] = useState(true);
   const [probe, setProbe] = useState<{ point: Vec3; floorY: number | null } | null>(null);
 
-  // Framed from where the capture actually has data, so any scene gets usable
-  // viewpoints. Deliberately denseBounds rather than the collider's full
-  // extent: a derived collider has scattered fringe coverage, and centring on
-  // the raw extent points the camera at empty space beside the real content.
-  const presets = useMemo(() => {
-    if (!assets.colliderData) return derivePresets(null, 0);
-    const grid = getWalkGrid(assets.colliderData);
-    const box = denseBounds(grid);
-    return derivePresets(box, box.min.y);
-  }, [assets.colliderData]);
+  const grid = useMemo(
+    () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
+    [assets.colliderData],
+  );
+
+  // Framed from where the capture actually has data and from where the camera
+  // can stand, so any scene gets usable viewpoints. The collider's full extent
+  // is a poor substitute: a derived collider has scattered fringe coverage, and
+  // centring on the raw extent points the camera at empty space beside the real
+  // content.
+  const presets = useMemo(
+    () => derivePresets(assets.roomBounds, assets.floor.baseY, grid),
+    [assets.roomBounds, assets.floor, grid],
+  );
   const preset = presets.find((p) => p.id === presetId) ?? presets[0];
-  const orbitTarget = preset.target;
 
   // Re-frame when the collider lands or the capture changes; without this the
   // camera keeps whatever pose suited the previous room.
@@ -68,7 +69,7 @@ export default function ScenePage() {
         camera={{ position: preset.position, fov: 60, near: 0.05, far: 2000 }}
         style={{ background: 'var(--bg)' }}
       >
-        <CameraRig mode={mode} target={orbitTarget} />
+        <CameraRig />
         <CameraPresetDriver preset={preset} nonce={presetNonce} />
 
         <RoomScene
@@ -111,15 +112,7 @@ export default function ScenePage() {
         </Panel>
 
         <Panel title="Camera">
-          <SegmentedControl
-            value={mode}
-            options={[
-              { value: 'orbit', label: 'Orbit' },
-              { value: 'fly', label: 'Fly' },
-            ]}
-            onChange={(next) => setMode(next as CameraMode)}
-          />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {presets.map((p) => (
               <button
                 key={p.id}
@@ -133,9 +126,7 @@ export default function ScenePage() {
             ))}
           </div>
           <p style={{ margin: '8px 0 0', color: 'var(--muted)', fontSize: 11, lineHeight: 1.45 }}>
-            {mode === 'orbit'
-              ? 'Drag to orbit · scroll to dolly · right-drag to pan.'
-              : 'Drag to look · WASD to move · Q/E down/up · Shift to sprint.'}
+            Drag to look · WASD or arrows to move · E/Space up, Q down · Shift to sprint.
           </p>
         </Panel>
 
@@ -205,32 +196,6 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       </h2>
       {children}
     </section>
-  );
-}
-
-function SegmentedControl({
-  value,
-  options,
-  onChange,
-}: {
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div style={{ display: 'flex', gap: 4 }}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={option.value === value ? 'primary' : undefined}
-          style={{ flex: 1, fontSize: 12, padding: '4px 8px' }}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
   );
 }
 

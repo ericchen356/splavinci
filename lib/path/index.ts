@@ -23,14 +23,14 @@ export {
 } from './astar';
 
 export {
-  buildCurve, cellsToWorldPoints, densify, countViolations,
-  easeInOut, easeInOutCubic, sampleCurveEased, DEFAULT_CURVE,
+  buildCurve, cellsToWorldPoints, countViolations,
+  easeInOut, easeInOutCubic, sampleCurveEased, segmentEase, hermiteRate, DEFAULT_CURVE,
   type BuiltCurve, type CurveOptions,
 } from './curve';
 
 export {
   resolveShot, inferShotType, inferDuration, readWall, roomShape,
-  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER,
+  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER, DEFAULT_PAN_SWEEP,
   type ShotIntent, type RoomShape, type StylePreset, type WallReading,
 } from './shots';
 

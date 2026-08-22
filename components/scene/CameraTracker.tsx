@@ -5,7 +5,7 @@
  *
  * Mount inside a <Canvas>, next to whatever is driving the camera:
  *
- *   <CameraRig mode={mode} />
+ *   <CameraRig />
  *   <CameraTracker onChange={setPose} />
  *
  * Reading the camera every frame is free; handing it to React every frame is

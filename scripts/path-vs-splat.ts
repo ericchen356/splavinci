@@ -9,7 +9,10 @@
  * field, the only thing that actually describes where the geometry is.
  */
 import { loadColliderFromDisk } from './path-lab';
-import { generatePath, createPathCache, buildWalkGrid, isPassable, cellToWorld } from '@/lib/path';
+import {
+  generatePath, createPathCache, buildWalkGrid, cellIndex, cellToWorld,
+  reachableMask, resolveCameraRadius,
+} from '@/lib/path';
 import { readSpz } from './lib/spz-read.mjs';
 import type { Vec3, Waypoint } from '@/lib/types';
 
@@ -53,14 +56,20 @@ const occupied = [...dens].filter(v => v > 0).sort((a, b) => a - b);
 const SOLID = occupied[Math.floor(occupied.length * 0.80)];
 console.log(`density voxels ${nx}x${ny}x${nz} @ ${CELL}m, solid threshold ${SOLID.toFixed(1)}`);
 
-// Place waypoints the way the app does: passable cells, well separated.
+// Place waypoints the way the app does: the UI snaps every click into the
+// reachable region, so sampling raw passable cells would test legs a user can
+// never actually create and blame the router for the straight-line fallback.
+const resolved = resolveCameraRadius(grid, 0.3);
+const reach = reachableMask(grid, resolved.radius);
 const spots: Vec3[] = [];
 for (let i = 0; spots.length < 4 && i < grid.cols * grid.rows; i += 53) {
   const c = i % grid.cols, r = (i / grid.cols) | 0;
-  if (!isPassable(grid, c, r, 0.2)) continue;
+  if (!reach.mask[cellIndex(grid, c, r)]) continue;
   const w = cellToWorld(grid, c, r);
   if (spots.every(s => Math.hypot(s[0] - w.x, s[2] - w.z) > 4)) spots.push([w.x, 0, w.z]);
 }
+console.log(`camera radius ${resolved.radius.toFixed(2)}m${resolved.relaxed ? ' (relaxed)' : ''}, ` +
+            `reachable ${reach.cells} cells`);
 const waypoints: Waypoint[] = spots.map((p, i) => ({
   id: `w${i + 1}`, position: p, mode: 'auto', shotType: 'orbit',
   duration: 4, emphasis: 1, pinned: false,

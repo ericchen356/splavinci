@@ -63,9 +63,35 @@ export type Waypoint = {
    * taking manual control of it, and a manual shot can be gentle.
    */
   emphasis: number;
+  /**
+   * Which arc a pan sweeps. Null lets the generator choose one.
+   *
+   * Authoritative when set, and deliberately not scaled by emphasis: naming an
+   * arc IS the amplitude, and having a second control quietly shrink it would
+   * reproduce exactly the problem the auto/manual blend had.
+   */
+  panSector: PanSector | null;
   /** True once the user has dragged or edited this waypoint; marks it and its
    *  immediate neighbours for targeted recompute instead of a full rebuild. */
   pinned: boolean;
+};
+
+/**
+ * An explicit arc for a pan, in absolute world bearings.
+ *
+ * Bearings, not an offset from whatever the shot happens to frame: a pan is
+ * "sweep from the window across to the fireplace", and that arc belongs to the
+ * room. Tying it to the auto-chosen target would move the shot whenever the
+ * target changed.
+ *
+ * `from` is a bearing in radians, measured the same way as
+ * Math.atan2(dz, dx). `sweep` is signed, so direction is explicit and an arc
+ * wider than half a turn is representable - neither is true if you store two
+ * endpoints and infer the shorter way round.
+ */
+export type PanSector = {
+  from: number;
+  sweep: number;
 };
 
 /** Sensible emphasis range for the UI. 1 is the style's own amplitude. */

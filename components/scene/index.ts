@@ -10,9 +10,9 @@ export { ColliderLayer, type ColliderLayerProps } from './ColliderLayer';
 export {
   CameraRig,
   CameraPresetDriver,
+  CAMERA_BODY_RADIUS,
   CAMERA_PRESETS,
   derivePresets,
-  type CameraMode,
   type CameraPreset,
   type CameraRigProps,
 } from './CameraRig';

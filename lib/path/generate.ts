@@ -37,7 +37,7 @@ import {
 import { getWalkGrid } from './gridCache';
 import { resolveCameraRadius } from './grid';
 import { findPath, simplifyPath, type Cell } from './astar';
-import { buildCurve, easeInOut, DEFAULT_CURVE } from './curve';
+import { buildCurve, easeInOut, hermiteRate, DEFAULT_CURVE } from './curve';
 import { sampleShot, vec3, type ShotContext } from './motion';
 import { resolveShot, STYLE_PRESETS, type ShotIntent } from './shots';
 import {
@@ -107,6 +107,7 @@ function waypointKey(w: Waypoint): string {
     w.shotType,
     round(w.duration, 2),
     round(w.emphasis, 3),
+    w.panSector ? `${round(w.panSector.from, 4)}:${round(w.panSector.sweep, 4)}` : '-',
   ].join('|');
 }
 
@@ -301,6 +302,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   // continuous with it, so each shot is asked for twice and fitting it is the
   // expensive part.
   const fittedShots = new Map<number, FittedShot>();
+  const shotSpeeds = new Map<number, number>();
   const shotContextFor = (index: number): FittedShot | null => {
     if (index < 0 || index >= waypoints.length) return null;
     const cached = fittedShots.get(index);
@@ -315,11 +317,47 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       // A waypoint whose target resolved to its own column has nothing to
       // frame; the shot falls back to its direction of travel.
       hasTarget: intent.targetDistance > 1e-6,
+      panSector: intent.panSector,
     };
     const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius);
     fittedShots.set(index, fitted);
     return fitted;
   };
+
+  /**
+   * How fast this shot moves the camera, in metres per second.
+   *
+   * Needed to hand over to the neighbouring leg at a matching rate: knowing
+   * only that both sides move is not enough, since a drifting pan and a travel
+   * leg can differ by more than tenfold and the junction lurches.
+   */
+  const shotSpeedFor = (index: number): number => {
+    const cached = shotSpeeds.get(index);
+    if (cached !== undefined) return cached;
+    const fitted = shotContextFor(index);
+    const duration = shots[index]?.duration ?? 0;
+    if (!fitted || duration <= 0) return 0;
+    let length = 0;
+    let previous: THREE.Vector3 | null = null;
+    for (let k = 0; k <= 16; k++) {
+      const p = sampleShot(fitted.shotType, fitted.ctx, k / 16).position;
+      if (previous) length += p.distanceTo(previous);
+      previous = p;
+    }
+    const speed = length / duration;
+    shotSpeeds.set(index, speed);
+    return speed;
+  };
+
+  const legSpeedFor = (index: number): number => {
+    const leg = legs[index];
+    if (!leg || !leg.curve || leg.duration <= 0) return 0;
+    return leg.length / leg.duration;
+  };
+
+  /** This segment's own rate, against a neighbour's. 0 when there is none. */
+  const rateAgainst = (mine: number, neighbour: number): number =>
+    mine > 1e-6 ? neighbour / mine : 0;
 
   for (let i = 0; i < waypoints.length; i++) {
     const w = waypoints[i];
@@ -339,11 +377,19 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       shots[i] = { ...shot, shotType: validated.shotType, intensity: validated.ctx.intensity };
     }
 
+    // Hand over at the neighbours' actual speeds, so the junction is smooth in
+    // velocity and not merely non-zero on both sides.
+    const ownSpeed = shotSpeedFor(i);
+    const shotEase = hermiteRate(
+      i > 0 ? rateAgainst(ownSpeed, legSpeedFor(i - 1)) : 0,
+      i < legs.length ? rateAgainst(ownSpeed, legSpeedFor(i)) : 0,
+    );
+
     pushSegment(
       'shot', `shot:${w.id}`, w.id, null, null,
       shot.duration,
       (t) => {
-        const s = sampleShot(validated.shotType, validated.ctx, easeInOut(t));
+        const s = sampleShot(validated.shotType, validated.ctx, shotEase(t));
         return { position: vec3(s.position), lookAt: vec3(s.lookAt) };
       },
       false,
@@ -381,6 +427,11 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       const fromLook = exitPose.lookAt.clone();
       const toLook = entryPose.lookAt.clone();
       const blendSpan = blendFractionFor(leg.duration);
+      const legSpeed = legSpeedFor(i);
+      const travelEase = hermiteRate(
+        rateAgainst(legSpeed, shotSpeedFor(i)),
+        rateAgainst(legSpeed, shotSpeedFor(i + 1)),
+      );
       // Lead expressed in curve parameter, since getPointAt is arc-length
       // based: a constant metre lead behaves the same on a long leg and a short
       // one, where a constant parameter lead would not.
@@ -398,7 +449,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
         nextWaypoint.id, w.id, nextWaypoint.id,
         leg.duration,
         (t) => {
-          const e = easeInOut(t);
+          const e = travelEase(t);
           if (!leg.curve) {
             // Degenerate leg: hold the exit pose rather than inventing motion.
             return { position: vec3(exitPose.position), lookAt: vec3(exitPose.lookAt) };
@@ -634,9 +685,10 @@ function computeLeg(
     });
   }
 
+  // buildCurve simplifies internally and keeps the full path for refinement.
   const simple = simplifyPath(grid, res.cells, opts.radius);
   const built = buildCurve(
-    grid, simple,
+    grid, res.cells,
     { radius: opts.radius, cameraHeight: opts.cameraHeight },
     fallbackFloorY,
   );
@@ -761,6 +813,19 @@ function fitShotToRoom(
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * Does this shot move the camera, or only its gaze?
+ *
+ * A pan and a hold leave the camera where it is, so a leg arriving at one is
+ * genuinely coming to rest and should brake. Everything else translates, and
+ * braking into it would insert a stop that is not there.
+ */
+function shotTranslates(shotType: ShotType): boolean {
+  // A pan now carries a slow drift, so a leg either side of it inherits motion
+  // rather than braking to a stop. Only a hold genuinely stops.
+  return shotType !== 'hold';
 }
 
 /** Smallest reach assumed when sizing the shot clip test, in metres. */

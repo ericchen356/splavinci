@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import Link from 'next/link';
 import {
+  CAMERA_BODY_RADIUS,
   CameraPresetDriver,
   CameraRig,
   CameraTracker,
@@ -23,7 +24,6 @@ import {
   RoomScene,
   derivePresets,
   isDrag,
-  type CameraMode,
   type CameraPose,
 } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
@@ -58,7 +58,6 @@ export default function PlanPage() {
     clearWaypoints, select, setStyle, generate,
   } = usePlanStore();
 
-  const [mode, setMode] = useState<CameraMode>('orbit');
   const [presetId, setPresetId] = useState('interior');
   const [presetNonce, setPresetNonce] = useState(0);
   const [pose, setPose] = useState<CameraPose | null>(null);
@@ -70,11 +69,12 @@ export default function PlanPage() {
   const selected = waypoints.find((w) => w.id === selectedId) ?? null;
   const selectedIndex = waypoints.findIndex((w) => w.id === selectedId);
 
-  // Framed from the collider's own extents: values tuned to the sample flat
-  // bury the camera in the terrain of a 30 x 37 m outdoor capture.
+  // Framed from the capture's own walkable space: values tuned to the sample
+  // flat bury the camera in the terrain of a 30 x 37 m outdoor capture, and the
+  // collider's raw extents are mostly empty margin around the real content.
   const presets = useMemo(
-    () => derivePresets(assets.roomBounds, assets.floor.baseY),
-    [assets.roomBounds, assets.floor],
+    () => derivePresets(assets.roomBounds, assets.floor.baseY, grid),
+    [assets.roomBounds, assets.floor, grid],
   );
   const preset = presets.find((p) => p.id === presetId) ?? presets[0];
 
@@ -97,7 +97,7 @@ export default function PlanPage() {
      message waiting to happen. */
   const camera = useMemo(() => {
     if (!grid) return null;
-    const resolved = resolveCameraRadius(grid, 0.3);
+    const resolved = resolveCameraRadius(grid, CAMERA_BODY_RADIUS);
     return { ...resolved, reach: reachableMask(grid, resolved.radius) };
   }, [grid]);
 
@@ -123,8 +123,8 @@ export default function PlanPage() {
      y comes from: a 3D click already has a surface, a mini-map click does not. */
   const dropAt3D = useCallback(
     (point: Vec3, event: ThreeEvent<MouseEvent>) => {
-      // Looking around in fly mode - or orbiting - would otherwise drop a
-      // waypoint wherever the drag happened to end.
+      // Looking around would otherwise drop a waypoint wherever the drag
+      // happened to end.
       if (isDrag(event)) return;
       const snapped = snapToReachable(point[0], point[2]);
       addWaypoint([snapped.x, assets.floorYAtOr(snapped.x, snapped.z), snapped.z]);
@@ -171,7 +171,7 @@ export default function PlanPage() {
       {/* ---------------- 3D viewport ---------------- */}
       <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
         <Canvas camera={{ position: preset.position, fov: 55, near: 0.05, far: 2000 }}>
-          <CameraRig mode={mode} target={preset.target} moveSpeed={flySpeed} />
+          <CameraRig moveSpeed={flySpeed} />
           <CameraPresetDriver preset={preset} nonce={presetNonce} />
           <CameraTracker onChange={setPose} />
           <RoomScene onFloorClick={dropAt3D}>
@@ -230,19 +230,7 @@ export default function PlanPage() {
 
         <div style={{ marginBottom: 16 }}>
           <div style={sectionLabel}>Camera</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {CAMERA_MODES.map((m) => (
-              <button
-                key={m.value}
-                className={mode === m.value ? 'primary' : undefined}
-                onClick={() => setMode(m.value)}
-                style={{ flex: 1, fontSize: 12, padding: '4px 8px' }}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {presets.map((p) => (
               <button
                 key={p.id}
@@ -255,11 +243,9 @@ export default function PlanPage() {
             ))}
           </div>
           <p style={{ margin: '7px 0 0', fontSize: 11, color: 'var(--muted)', lineHeight: 1.45 }}>
-            {mode === 'orbit'
-              ? 'Drag to orbit · scroll to dolly · right-drag to pan.'
-              : 'Drag to look · WASD to move · Q/E down/up · Shift to sprint.'}
-            {' '}Click the floor without dragging to drop a waypoint, and drag a
-            marker on the mini-map to move one.
+            Drag to look · WASD or arrows to move · E/Space up, Q down · Shift to
+            sprint. Click the floor without dragging to drop a waypoint, and drag
+            a marker on the mini-map to move one.
           </p>
         </div>
 
@@ -376,11 +362,6 @@ export default function PlanPage() {
     </div>
   );
 }
-
-const CAMERA_MODES: readonly { value: CameraMode; label: string }[] = [
-  { value: 'orbit', label: 'Orbit' },
-  { value: 'fly', label: 'Fly' },
-];
 
 const sectionLabel: React.CSSProperties = {
   fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
