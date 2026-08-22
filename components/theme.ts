@@ -29,6 +29,7 @@ export type ThemeTokens = {
   mapRoute: string;
   mapAim: string;
   mapCamera: string;
+  mapKeyline: string;
   /* markers, in the map and in the scene graph */
   marker: string;
   markerSelected: string;
@@ -55,6 +56,7 @@ const VARS: Record<keyof ThemeTokens, string> = {
   mapRoute: '--map-route',
   mapAim: '--map-aim',
   mapCamera: '--map-camera',
+  mapKeyline: '--map-keyline',
   marker: '--marker',
   markerSelected: '--marker-selected',
   markerInk: '--marker-ink',
@@ -68,24 +70,25 @@ const VARS: Record<keyof ThemeTokens, string> = {
 
 /** Mirrors the token block in app/globals.css. Used before a document exists. */
 const FALLBACK: ThemeTokens = {
-  mapGround: '#0d0e10',
-  mapFloor: '#59626f',
-  mapFloorCut: '#3c4149',
-  mapWall: '#2b3038',
-  mapWallLine: '#c3cbd6',
-  mapOpenLine: '#8fbcff',
-  mapRoute: '#9cc4ff',
-  mapAim: '#f5c169',
-  mapCamera: '#edeef0',
-  marker: '#6ea8fe',
-  markerSelected: '#cfe1ff',
-  markerInk: '#edeef0',
-  markerInkInverse: '#0d0e10',
-  markerFill: '#26292e',
+  mapGround: '#00000000',
+  mapFloor: '#2b2f36',
+  mapFloorCut: '#4c4a55',
+  mapWall: '#00000000',
+  mapWallLine: '#00000000',
+  mapOpenLine: '#6aa5ff',
+  mapRoute: '#7cb2ff',
+  mapAim: '#ffb84d',
+  mapCamera: '#ffffff',
+  mapKeyline: '#0b0d11',
+  marker: '#2e6ecb',
+  markerSelected: '#2e6ecb',
+  markerInk: '#1b4f9c',
+  markerInkInverse: '#ffffff',
+  markerFill: '#f5f7fa',
   sceneSky: '#dfe7f5',
   sceneBounce: '#2a2620',
-  ink: '#edeef0',
-  muted: '#939aa3',
+  ink: '#16161a',
+  muted: '#5c6069',
 };
 
 let cached: ThemeTokens | null = null;

@@ -6,87 +6,111 @@
  * because those are exactly the values that drift apart when they are re-picked
  * per component.
  *
- * WHY THE CHROME IS DARK
- * The content on both screens is a photoreal Gaussian splat render, and on
- * /review it is a moving image the user is judging before exporting it. Every
- * tool where someone assesses an image — Resolve, Premiere, After Effects,
- * Unreal, Blender — surrounds it with a dark, near-neutral field, because a
- * bright surround shifts the perceived exposure and colour of the image sitting
- * in it, and because a dark viewport inside light chrome reads as a hole rather
- * than as the subject. Figma goes the other way, but Figma's canvas is artwork
- * the user is drawing, not a photograph they are grading.
+ * WHY THE CHROME IS LIGHT AND ACHROMATIC
+ * This started dark, on the reasoning that grading tools surround an image with
+ * a dark field. That reasoning was sound and the result was still wrong here:
+ * splavinci is not a grading tool. Nobody is judging exposure on these screens
+ * - they are placing waypoints on a plan and reading a route - and the dark
+ * chrome made an authoring tool look like a player.
  *
- * So the greys here are deliberately achromatic — saturation under 4% across
- * the whole ramp — so the chrome adds no colour cast to the capture. The splat
- * is the only saturated thing on screen. One blue accent carries focus,
- * selection and links; green, amber and red carry state and nothing else.
+ * So the chrome is light and, more importantly, NEARLY COLOURLESS. Selection,
+ * focus and emphasis are all carried by ink weight rather than by a hue:
+ * --accent is near-black. That is not a style preference, it is what keeps
+ * colour meaning something. The only saturated things on screen are the splat
+ * itself and the map's own ink - route, aim, camera - where a hue IS the data.
+ * Put a blue accent in the chrome and the blue route line stops reading as a
+ * route and starts reading as more chrome.
  *
- * Every text pair below was measured, not eyeballed. Body text clears 4.5:1
- * against every surface it can land on, and control borders, focus rings and
- * the map's own regions clear 3:1.
+ * Greys stay achromatic (saturation under 4% across the ramp) so the chrome
+ * adds no cast to the capture sitting next to it.
+ *
+ * Every pair below was measured, not eyeballed, and the measured figure is in
+ * the comment beside it. Body text clears 4.5:1 against every surface it can
+ * land on. Control borders are the deliberate exception and the note on
+ * --line explains what carries state in their place.
  * ================================================================ */
 
 :root {
   color-scheme: light;
 
   /* ---- ground & surfaces ----
-     Four steps, and no more: the app background, the panels on it, the
-     controls in those panels, and the wells controls sit in. */
-  --ground: #f3f3f6;
+     Warm neutrals, not blue-greys. Four steps and no more: the app background,
+     the panels on it, the controls in those panels, and the wells they sit in. */
+  --ground: #f7f7f8;
   --surface: #ffffff;
-  --surface-sunk: #eeeef2;
+  --surface-sunk: #f2f2f3;
   --control: #ffffff;
-  --control-hover: #f2f2f5;
-  --hover: rgba(22, 22, 26, 0.05);
-  --press: rgba(22, 22, 26, 0.09);
+  --control-hover: #f7f7f8;
+  --hover: rgba(18, 18, 20, 0.045);
+  --press: rgba(18, 18, 20, 0.08);
 
   /* ---- text ----
-     Measured on --surface: ink 17.9:1 · ink-soft 9.1:1 · muted 5.0:1. */
-  --ink: #16161a;
-  --ink-soft: #4a4a55;
-  --muted: #6b6b77;
+     Measured on --surface: ink 18.7:1 · ink-soft 10.4:1 · muted 5.0:1.
+     Measured on --ground:  ink 17.5:1 · muted 4.7:1 - muted is the tight one,
+     so it is a floor, not a starting point for anything quieter. */
+  --ink: #121214;
+  --ink-soft: #3f3f46;
+  --muted: #6f6f77;
 
   /* ---- lines ----
-     --line is decorative: panel edges, dividers, list separators.
-     --line-strong is structural - it is the boundary that MAKES a control read
-     as a control - so it is pinned above 3:1 on --surface rather than left as
-     a hairline. A button whose edge you cannot find is not a button. */
-  --line: rgba(22, 22, 26, 0.11);
-  --line-strong: rgba(22, 22, 26, 0.48);
+     HAIRLINES, deliberately. An earlier pass pinned every control edge at 3:1
+     and the result read as a wireframe: forty boxes all shouting their own
+     boundary. The weight moved off the resting border and onto the states that
+     actually carry information -
+       hover     a fill change, never a border change
+       focus     a 2px --ink ring, which is 18.6:1
+       selected  a 1.5px --ink border plus --shadow-1
+     WCAG 1.4.11 governs the visual information needed to identify a control
+     and its state. Those three are all well past 3:1 - a --accent edge is
+     18.7:1 on --surface. The resting hairlines are not: composited over white
+     they measure --line 1.2:1 and --line-strong 1.4:1, and they are doing
+     decorative work alongside fill, padding and shape. That is a considered
+     trade, not an oversight. --line-firm is the compliant one at 3.1:1, and
+     any control that loses its fill and its states has to come back up to it. */
+  --line: rgba(18, 18, 20, 0.07);
+  --line-strong: rgba(18, 18, 20, 0.14);
+  --line-firm: rgba(18, 18, 20, 0.46);
 
   /* ---- accent ----
-     One blue, carrying focus, selection and links and nothing else. */
-  --accent: #2e6ecb;
+     Near-black, not blue. Selection, focus and emphasis are all carried by ink
+     weight, which keeps colour free to mean something on the map and in the
+     3D overlay - the only two places in this app where a hue is data rather
+     than decoration. */
+  --accent: #121214;
   --on-accent: #ffffff;
-  --accent-soft: rgba(46, 110, 203, 0.10);
-  --accent-line: rgba(46, 110, 203, 0.45);
-  --focus: #2e6ecb;
+  --accent-soft: rgba(18, 18, 20, 0.05);
+  --accent-line: rgba(18, 18, 20, 0.82);
+  --focus: #121214;
 
   /* ---- state ----
-     Darkened from the dark-theme versions: the same hues at their previous
-     lightness fail against white. */
+     Used sparingly. Only a genuine failure gets a hue; routine remarks are
+     --muted text, because an amber box around ordinary operation reads as a
+     fault report. Measured on --surface: warn 5.9:1 · danger 5.5:1 ·
+     success 5.7:1. */
   --success: #2f7350;
-  --success-soft: rgba(47, 115, 80, 0.12);
+  --success-soft: rgba(47, 115, 80, 0.10);
   --warn: #8a5a12;
-  --warn-soft: rgba(214, 165, 52, 0.16);
-  --warn-line: rgba(160, 116, 30, 0.36);
+  --warn-soft: rgba(214, 165, 52, 0.12);
+  --warn-line: rgba(160, 116, 30, 0.28);
   --danger: #bf372d;
-  --danger-soft: rgba(191, 55, 45, 0.10);
-  --danger-line: rgba(191, 55, 45, 0.32);
+  --danger-soft: rgba(191, 55, 45, 0.08);
+  --danger-line: rgba(191, 55, 45, 0.26);
 
   /* ---- elevation ----
-     Two, and only for things that genuinely float over the 3D viewport. A
-     panel inside the sidebar is separated by a border, not by a shadow. */
-  --shadow-1: 0 1px 2px rgba(22, 22, 26, 0.05), 0 1px 3px rgba(22, 22, 26, 0.05);
-  --shadow-2: 0 2px 6px rgba(22, 22, 26, 0.06), 0 12px 32px rgba(22, 22, 26, 0.12);
+     Almost none. Cards are separated by a hairline and by the ground showing
+     between them; a shadow is reserved for something genuinely floating over
+     the 3D viewport. */
+  --shadow-1: 0 1px 2px rgba(18, 18, 20, 0.04);
+  --shadow-2: 0 1px 3px rgba(18, 18, 20, 0.06), 0 8px 24px rgba(18, 18, 20, 0.09);
 
-  /* ---- radii
-     Small on purpose. This is a dense instrument panel; a 16px corner on a
-     26px button turns it into a lozenge. */
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 12px;
+  /* ---- radii ----
+     Generous. The previous 4-8px scale was chosen for a dense instrument
+     panel and read as cramped next to the whitespace this layout now has. */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
   --r-pill: 999px;
 
   /* ---- spacing (4pt rhythm) ---- */
@@ -113,10 +137,12 @@
 
   /* ---- motion ----
      Three durations, chosen by how far something travels: a state flip, a
-     panel opening, something arriving from off-screen. */
-  --t-fast: 100ms;
-  --t-mid: 180ms;
-  --t-slow: 280ms;
+     panel opening, something arriving from off-screen. Only colour, shadow and
+     transform are ever transitioned - animating width or height lays out the
+     page sixty times a second. */
+  --t-fast: 120ms;
+  --t-mid: 200ms;
+  --t-slow: 320ms;
   --ease-out: cubic-bezier(0.22, 0.78, 0.3, 1);
   --ease-in-out: cubic-bezier(0.5, 0, 0.3, 1);
 
@@ -142,33 +168,47 @@
    * THREE.Color parses hex and rgb(), never rgba().
    * ================================================================ */
 
-  /* The mini-map is a drawing, not imagery, so it is lit like a printed floor
-     plan: open floor is the lightest region, wall mass is the darkest, and
-     unsurveyed space sits between them as a flat grey that reads as "no data"
-     rather than as room. That ordering is what makes it scan as rooms and
-     hallways instead of as a field of coloured cells.
+  /* The mini-map floats on the 3D render rather than sitting in a card, so it
+     paints ONLY the space you can fly in: a dark silhouette of the walkable
+     region, with everything else left clear.
 
-     Measured: floor vs unsurveyed 1.42:1 by luminance but separated by the
-     wall outline; wall vs floor 8.9:1 · route vs floor 5.0:1 ·
-     aim vs floor 4.4:1 · camera dot vs floor 17.4:1. */
-  --map-ground: #e4e4ea;
-  --map-floor: #ffffff;
-  --map-floor-cut: #dcdbe3;
-  --map-wall: #454b56;
-  --map-wall-line: #272c34;
-  --map-open-line: #2e6ecb;
-  --map-route: #2e6ecb;
-  --map-aim: #a86b12;
-  --map-camera: #16161a;
+     Wall mass and unsurveyed space are transparent on purpose. Filling them
+     covered the map in dark cells that read as speckle rather than structure,
+     and the walkable region's own outline already describes the rooms far more
+     clearly than a field of blocks does.
+
+     Route, aim and camera are measured against the dark fill, not against the
+     scene, since that is what they are drawn on: route 4.6:1 · aim 4.3:1 ·
+     camera dot 12.9:1. */
+  --map-ground: transparent;
+  --map-floor: #2b2f36;
+  --map-floor-cut: #4c4a55;
+  --map-wall: transparent;
+  --map-wall-line: transparent;
+  /* Ink on the map reads against --map-floor (a dark grey), NOT against the
+     page. Anything tuned for the light chrome disappears on it, so this group
+     is deliberately light and stays light. */
+  --map-open-line: #6aa5ff;
+  --map-route: #7cb2ff;
+  --map-aim: #ffb84d;
+  /* You-are-here. White, because it must be the first thing found on a map
+     that is otherwise blue-on-grey. */
+  --map-camera: #ffffff;
+  /* Keyline under light map ink, for where a marker crosses off the plan and
+     onto the bright render behind it. */
+  --map-keyline: #0b0d11;
 
   /* Markers, in the map and in the 3D scene. In 3D they sit over arbitrary
      photographic content, so they carry a light core and a dark rim to stay
      legible against either a bright wall or a dark corner. */
+  /* Unselected: near-white disc, blue rule, blue numeral. Selected: the fill
+     and the numeral trade places. Both discs stay light or saturated so they
+     hold up over the dark map, and neither numeral is black. */
   --marker: #2e6ecb;
-  --marker-selected: #16437f;
-  --marker-ink: #ffffff;
-  --marker-ink-inverse: #16161a;
-  --marker-fill: #ffffff;
+  --marker-selected: #2e6ecb;
+  --marker-ink: #1b4f9c;
+  --marker-ink-inverse: #ffffff;
+  --marker-fill: #f5f7fa;
 
   /* Scene lighting. Not UI colour — a cool key and a warm bounce, so overlay
      geometry reads against the splat cloud without tinting it. */
@@ -176,12 +216,12 @@
   --scene-bounce: #2a2620;
 }
 
-/* Dark only, on purpose.
-   There is no prefers-color-scheme: light block and there should not be one.
-   The reason the chrome is dark is stated at the top of this file: it is about
-   how a photoreal render is perceived, not about a user's OS preference. A
-   light palette here would put the tool in a surround that fights the thing it
-   exists to show, so the app pins the theme the way a video editor does. */
+/* One theme, pinned.
+   There is no prefers-color-scheme block and there should not be one. The
+   surround is a light warm grey because that is what the tool is: a storyboard
+   for a flythrough, read and annotated far more than it is graded. Pinning it
+   also means the mini-map's own palette — which is tuned against a dark plan
+   fill, not against the page — has exactly one background to be legible on. */
 
 /* ================================================================
  * Reset & base
@@ -201,8 +241,14 @@ body {
 }
 
 body {
-  background: var(--ground);
+  background-color: var(--ground);
   color: var(--ink);
+  /* The last blue in the chrome was not ours: a native checkbox or radio paints
+     itself with the platform accent, so /plan's layer switches were rendering
+     system blue next to an otherwise monochrome palette. accent-color inherits,
+     so setting it once here covers every native control on every screen —
+     including the ones the other partials have not written yet. */
+  accent-color: var(--accent);
   font-family: var(--font-sans);
   font-size: var(--fs-3);
   line-height: 1.5;
@@ -211,6 +257,9 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Weight, not size, carries hierarchy here — the reference this was matched to
+   sets a bold title beside regular grey metadata on the same line, and that
+   only reads if the bold is genuinely bold. */
 h1,
 h2,
 h3 {
@@ -220,13 +269,35 @@ h3 {
   text-wrap: balance;
 }
 
+/* No underline at rest, underline on hover.
+   --accent is near-black now, so an inline link is the same colour as the
+   prose around it and wants the underline. But most <a> in this app is not
+   prose: it is a card, a nav tab or a button, and every screen is free to
+   invent another one — /  grew .home-render while this file was being written.
+   Underlining by default therefore breaks link-shaped SURFACES faster than it
+   helps link-shaped WORDS, so the default stays off and the hover carries it.
+   The opt-out below is a plain selector, not :where(): :where() contributes no
+   specificity, so an opt-out written that way loses to `a` itself. */
 a {
   color: var(--accent);
   text-decoration: none;
+  text-underline-offset: 0.18em;
   border-radius: var(--r-xs);
+  transition: color var(--t-fast) var(--ease-out);
 }
 a:hover {
   text-decoration: underline;
+}
+
+/* Anything shaped like a control is not a run of prose, so it never underlines,
+   at rest or on hover. .plan__review is a <Link> carrying `button primary`,
+   which is why the .button alias matters: without it that control was an
+   underlined leftover of the blue-link era. */
+a.btn:hover,
+a.button:hover,
+a.icon-btn:hover,
+a.opt:hover {
+  text-decoration: none;
 }
 
 button,
@@ -237,13 +308,30 @@ select {
   color: inherit;
 }
 
-/* A bare <button> gets the control treatment by DEFAULT rather than being
-   stripped to nothing. The reset that removed borders assumed every call site
-   would opt back in via .btn; the ones that had not yet migrated rendered as
-   floating text with no affordance at all. Defaulting to a real control means
-   a missed migration degrades to "correct but unrefined" instead of "broken".
-   Opt out with .btn--ghost where a borderless control is genuinely wanted. */
-button {
+/* ================================================================
+ * The control recipe
+ *
+ * A bare <button> gets the full treatment by DEFAULT rather than being stripped
+ * to nothing — /review is still almost entirely unclassed markup, so a reset
+ * that assumed every call site would opt in via .btn would leave that screen as
+ * a page of floating text. Opt out with .btn--ghost.
+ *
+ * `.button` is the same recipe as a class, for the <Link>s that need to look
+ * like controls. An element selector cannot reach an <a>.
+ *
+ * Resting state is a white fill and a HAIRLINE. All the visual weight is in the
+ * states, and each state changes fill and never border WIDTH, so nothing in a
+ * row reflows by a pixel when the pointer crosses it:
+ *   hover     --hover wash + ink text   fill 1.1:1 vs white, text 17.1:1
+ *   active    --press wash              fill 1.2:1 vs white
+ *   focus     2px --ink ring, offset 2  18.7:1 on --surface, 17.5:1 on ground
+ *   selected  --ink border + --shadow-1 18.7:1, against a 1.4:1 hairline
+ *   disabled  --muted on --ground       4.7:1 — greyed, still readable
+ * ================================================================ */
+
+button,
+.btn,
+.button {
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
@@ -253,38 +341,90 @@ button {
   min-height: var(--h-control);
   padding: 0 var(--s3);
   font-size: var(--fs-2);
+  font-weight: 550;
   color: var(--ink);
-  background: var(--control);
+  white-space: nowrap;
+  background-color: var(--control);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out);
+  transition: background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
 }
-button:hover:not(:disabled) { background: var(--control-hover); }
-button:active:not(:disabled) { background: var(--press); }
 
-/* The selected option in a group.
-   Components mark selection with `primary`; the class was not defined after
-   the restyle, so the active capture, camera preset and style all rendered
-   identically to the inactive ones. Selection reads through a tinted fill, a
-   coloured border and heavier text rather than an inverted slab, which would
-   drop a hard block of colour into an otherwise quiet panel. */
+button:hover:not(:disabled, [aria-disabled='true']),
+.btn:hover:not(:disabled, [aria-disabled='true']),
+.button:hover:not(:disabled, [aria-disabled='true']) {
+  background-color: var(--hover);
+}
+button:active:not(:disabled, [aria-disabled='true']),
+.btn:active:not(:disabled, [aria-disabled='true']),
+.button:active:not(:disabled, [aria-disabled='true']) {
+  background-color: var(--press);
+}
+
+/* THE SELECTED STATE, and the single most load-bearing rule in this file.
+   Components mark selection with a bare `primary` class — the capture, the
+   camera preset, the path style, the shot type and the auto/manual toggle all
+   run through it, and it has silently rendered as "identical to unselected"
+   twice now, once because the class was undefined and once because its only
+   signal was a blue that the palette no longer contains.
+
+   Three redundant channels, so losing any one of them does not lose the state:
+   an ink border (18.7:1 against the white panel, versus a 1.4:1 hairline on
+   its neighbours), --shadow-1 lifting it off the panel, and heavier text. The
+   border stays 1px and the fill stays white: a 1.5px border would shift the
+   label half a pixel as selection moved down a list, and a tinted fill would
+   drop --muted detail text to 4.50:1. */
 button.primary,
-.btn.primary {
-  color: var(--accent);
-  background: var(--accent-soft);
+.btn.primary,
+.button.primary {
+  color: var(--ink);
+  background-color: var(--surface);
   border-color: var(--accent);
-  font-weight: 600;
+  font-weight: 650;
+  box-shadow: var(--shadow-1);
 }
-button.primary:hover:not(:disabled) {
-  background: rgba(46, 110, 203, 0.16);
+button.primary:hover:not(:disabled),
+.btn.primary:hover:not(:disabled),
+.button.primary:hover:not(:disabled) {
+  background-color: var(--hover);
 }
-button:disabled {
+button.primary:active:not(:disabled),
+.btn.primary:active:not(:disabled),
+.button.primary:active:not(:disabled) {
+  background-color: var(--press);
+}
+
+/* Greyed rather than faded. `opacity` was doing this job and it dropped ink to
+   roughly 3.5:1 — legible enough to tempt a click, too weak to read. An explicit
+   pair states "inert" through the fill and keeps the label at 4.7:1.
+
+   Placed AFTER .primary deliberately. `button:disabled` and `button.primary`
+   have identical specificity, so whichever is written last wins, and a disabled
+   selected option — a capture whose files are missing, a shot type that does
+   not apply to the current waypoint — has to read as unavailable first and
+   selected second. */
+button:disabled,
+.btn:disabled,
+.button[aria-disabled='true'],
+button[aria-disabled='true'] {
+  color: var(--muted);
+  background-color: var(--ground);
+  border-color: var(--line);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
 canvas {
+  display: block;
+}
+
+/* An icon in a flex row must not be squeezed by a long label beside it, and
+   must not sit on the text baseline and add a descender gutter to the row. */
+.icon {
+  flex: none;
   display: block;
 }
 
@@ -293,41 +433,54 @@ canvas {
    common accessibility regression in a redesign.
 
    The 2px offset matters: it puts the ring on the panel behind the control
-   rather than against the control's own fill, so the ring keeps its 9.74:1
-   even on the one button that is filled with the accent colour. */
+   rather than against the control's own fill, so the ring keeps 18.7:1 even on
+   .btn--primary, which is filled with the ring's own colour. */
 :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
+/* --accent-soft is a 5% wash: as a selection highlight it was invisible.
+   --line-firm is the lightest token that still reads as a highlight, and ink on
+   it measures 6.0:1. */
 ::selection {
-  background: var(--accent-soft);
+  background-color: var(--line-firm);
+  color: var(--ink);
 }
 
-.visually-hidden {
+.visually-hidden,
+.sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+  border: 0;
 }
 
 /* Slim scrollbars: both sidebars scroll, and a full-width platform bar in a
-   344px column is a visible chunk of the panel. */
+   344px column is a visible chunk of the panel. The thumb is --line-firm
+   (3.1:1) rather than the control hairline, which at 1.4:1 was a scrollbar
+   you could not find. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-color: var(--line-firm) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
+  background-color: var(--line-firm);
   border: 3px solid transparent;
   border-radius: var(--r-pill);
   background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
 }
 
 /* ================================================================
@@ -347,30 +500,38 @@ canvas {
   min-height: 0;
 }
 
+/* Stacked above the body on purpose. .app-body is position:relative with no
+   z-index, so it opens no stacking context of its own, and the --z-overlay
+   panels inside it were free to paint over the nav bar. */
 .app-nav {
+  position: relative;
+  z-index: var(--z-chrome);
   display: flex;
   align-items: center;
   gap: var(--s1);
   flex: 0 0 auto;
   height: var(--h-nav);
   padding: 0 var(--s3);
-  background: var(--surface);
+  background-color: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
 .app-nav__brand {
   margin-right: var(--s3);
-  padding: var(--s1) 0;
+  padding: var(--s1) var(--s2);
   font-size: var(--fs-3);
   font-weight: 650;
   letter-spacing: 0.01em;
   color: var(--ink);
+  border-radius: var(--r-sm);
+  transition: background-color var(--t-fast) var(--ease-out);
 }
 .app-nav__brand:hover {
-  text-decoration: none;
-  color: var(--ink);
+  background-color: var(--hover);
 }
 
+/* Pills, because a tab strip is the one place in this layout where the target
+   is read as a discrete object rather than as a cell in a form. */
 .app-nav__tab {
   display: inline-flex;
   align-items: center;
@@ -379,20 +540,29 @@ canvas {
   font-size: var(--fs-3);
   font-weight: 550;
   color: var(--muted);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
+  cursor: pointer;
   transition: color var(--t-fast) var(--ease-out),
-    background var(--t-fast) var(--ease-out);
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
 }
 .app-nav__tab:hover {
   color: var(--ink);
-  background: var(--hover);
-  text-decoration: none;
+  background-color: var(--hover);
 }
-/* The current screen, stated rather than implied. Colour is not the only
-   signal — aria-current carries it for anything that is not looking. */
+.app-nav__tab:active {
+  background-color: var(--press);
+}
+/* The current screen, stated rather than implied — and stated the same way
+   selection is stated everywhere else in the app, an ink edge plus --shadow-1.
+   Drawn as an inset shadow rather than a border because the resting tab has no
+   border to change, and adding one would move the label by a pixel.
+   aria-current carries the same fact to anything that is not looking. */
 .app-nav__tab[aria-current='page'] {
   color: var(--ink);
-  background: var(--accent-soft);
+  font-weight: 650;
+  background-color: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--accent), var(--shadow-1);
 }
 
 /* ================================================================
@@ -426,8 +596,8 @@ canvas {
 .sidebar {
   flex: 0 0 var(--w-sidebar);
   width: var(--w-sidebar);
-  padding: var(--s3);
-  background: var(--surface);
+  padding: var(--s4);
+  background-color: var(--surface);
   border-left: 1px solid var(--line);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -435,8 +605,8 @@ canvas {
 
 .transport {
   flex: 0 0 auto;
-  padding: var(--s3);
-  background: var(--surface);
+  padding: var(--s4);
+  background-color: var(--surface);
   border-top: 1px solid var(--line);
 }
 
@@ -464,10 +634,10 @@ canvas {
 
 .stack {
   display: grid;
-  gap: var(--s1);
+  gap: var(--s2);
 }
 .stack--loose {
-  gap: var(--s2);
+  gap: var(--s3);
 }
 
 .spacer {
@@ -477,21 +647,22 @@ canvas {
 .grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--s1);
+  gap: var(--s2);
 }
 .grid-4 {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: var(--s1);
+  gap: var(--s2);
 }
 
 .section {
-  margin-bottom: var(--s4);
+  margin-bottom: var(--s5);
 }
 
 /* Sentence case, not shouted caps. A section label is read, and letter-spaced
    uppercase is measurably slower to read than the same words in sentence case
-   — the size and weight already mark it as a header. */
+   — the size and weight already mark it as a header. --ink-soft on the white
+   panel is 10.4:1. */
 .section__label {
   margin-bottom: var(--s2);
   font-size: var(--fs-2);
@@ -510,6 +681,9 @@ canvas {
  * Type helpers
  * ================================================================ */
 
+/* --muted is 5.0:1 on --surface and 4.7:1 on --ground, both clear. It is
+   4.45:1 on --surface-sunk, which is NOT clear, so every sunk surface below
+   lifts its secondary text to --ink-soft instead of using this. */
 .meta {
   font-size: var(--fs-1);
   line-height: 1.5;
@@ -535,84 +709,86 @@ canvas {
 
 .strong-ink {
   color: var(--ink);
+  font-weight: 650;
 }
 .accent-ink {
   color: var(--accent);
 }
+/* 5.9:1 on --surface, 5.5:1 on --ground. */
 .warn-ink {
   color: var(--warn);
 }
+/* 5.5:1 on --surface, 5.2:1 on --ground. */
 .danger-ink {
   color: var(--danger);
 }
 
 /* ================================================================
- * Buttons
+ * Button variants
+ *
+ * The base recipe is above, with `button`. These only add the differences.
  * ================================================================ */
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s2);
-  min-height: var(--h-control);
-  padding: 0 var(--s3);
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--ink);
-  white-space: nowrap;
+.btn,
+.button {
   text-decoration: none;
-  background: var(--control);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
-  transition: background var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
-}
-.btn:hover:not(:disabled) {
-  background: var(--control-hover);
-  border-color: var(--accent-line);
-  text-decoration: none;
-}
-.btn:active:not(:disabled) {
-  background: var(--press);
-}
-.btn:disabled {
-  opacity: 0.45;
 }
 
-/* Exactly one primary per view: the highest-contrast thing on screen, which is
-   what makes "what do I do next" answerable at a glance. */
+/* Exactly one per view: the highest-contrast thing on screen, which is what
+   makes "what do I do next" answerable at a glance. Hover LIGHTENS to
+   --ink-soft (white on it is 10.4:1) and the press returns to full ink, so the
+   two states move in opposite directions and cannot be confused. */
 .btn--primary {
   color: var(--on-accent);
-  background: var(--accent);
+  background-color: var(--accent);
   border-color: var(--accent);
   font-weight: 650;
 }
 .btn--primary:hover:not(:disabled) {
-  background: #86b6ff;
-  border-color: #86b6ff;
+  color: var(--on-accent);
+  background-color: var(--ink-soft);
+  border-color: var(--ink-soft);
+}
+.btn--primary:active:not(:disabled) {
+  background-color: var(--accent);
+  border-color: var(--accent);
 }
 
+/* Outlined at rest so a destructive action is not a red slab sitting in a quiet
+   panel, filled on press so the commit is unmistakable.
+   Label 5.5:1 on white, 4.9:1 on the hover wash, 5.5:1 inverted on press. */
 .btn--danger {
   color: var(--danger);
+  background-color: var(--surface);
   border-color: var(--danger-line);
-  background: var(--danger-soft);
 }
 .btn--danger:hover:not(:disabled) {
   color: var(--danger);
-  background: rgba(243, 118, 110, 0.22);
+  background-color: var(--danger-soft);
+}
+.btn--danger:active:not(:disabled) {
+  color: var(--on-accent);
+  background-color: var(--danger);
   border-color: var(--danger);
 }
 
-/* Quiet: used where a bordered button would clutter a dense row. */
+/* Quiet: used where a bordered button would clutter a dense row. It is the one
+   control with no resting edge, so its hover fill is the whole affordance. */
 .btn--ghost {
   color: var(--muted);
-  background: transparent;
+  background-color: transparent;
   border-color: transparent;
 }
 .btn--ghost:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--hover);
+  background-color: var(--hover);
+  border-color: transparent;
+}
+.btn--ghost:active:not(:disabled) {
+  background-color: var(--press);
+}
+.btn--ghost:disabled {
+  background-color: transparent;
   border-color: transparent;
 }
 
@@ -620,6 +796,13 @@ canvas {
   min-height: var(--h-control-sm);
   padding: 0 var(--s2);
   font-size: var(--fs-1);
+}
+
+/* Fully round. The reference reserves the pill for a standalone action that is
+   not part of a form row — a filter, a "new", a tab. */
+.btn--pill {
+  border-radius: var(--r-pill);
+  padding: 0 var(--s4);
 }
 
 .btn--block {
@@ -638,23 +821,42 @@ canvas {
   flex: none;
   width: var(--h-control-sm);
   height: var(--h-control-sm);
+  min-height: var(--h-control-sm);
+  padding: 0;
   color: var(--muted);
-  background: transparent;
+  background-color: transparent;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
+  cursor: pointer;
   transition: color var(--t-fast) var(--ease-out),
-    background var(--t-fast) var(--ease-out);
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
 }
 .icon-btn:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--hover);
+  background-color: var(--hover);
+}
+.icon-btn:active:not(:disabled) {
+  background-color: var(--press);
+}
+/* A toggling icon button — a layer switch, a pin, a mute — needs the same ink
+   edge as every other selected control, or it reads as merely hovered. */
+.icon-btn[aria-pressed='true'] {
+  color: var(--ink);
+  background-color: var(--surface);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
 }
 .icon-btn:disabled {
-  opacity: 0.4;
+  color: var(--muted);
+  background-color: transparent;
+  border-color: transparent;
+  cursor: not-allowed;
 }
 .icon-btn--danger:hover:not(:disabled) {
   color: var(--danger);
-  background: var(--danger-soft);
+  background-color: var(--danger-soft);
 }
 
 /* ================================================================
@@ -666,40 +868,62 @@ canvas {
  * all this control, so they are all this class — they were six different
  * paddings before.
  *
- * Selection is carried by aria-pressed, so the state is announced and not only
- * seen, and it reads through fill + border + a left marker rather than by
- * colour alone.
+ * An .opt is a TILE rather than a button, so it takes the 12px inner-tile
+ * radius rather than the 8px control radius. Selection is carried by
+ * aria-pressed, so the state is announced and not only seen.
  * ================================================================ */
 
 .opt {
   display: block;
   width: 100%;
   min-height: var(--h-control);
-  padding: var(--s1) var(--s2);
+  padding: var(--s2) var(--s3);
   font-size: var(--fs-2);
   font-weight: 550;
   text-align: left;
+  /* Reset, because the element rule above sets nowrap for a button's own label
+     and an .opt is a tile with a description line under it. .opt__label puts
+     nowrap back on the one row that does need to ellipsise. */
+  white-space: normal;
   color: var(--ink-soft);
-  background: var(--control);
+  background-color: var(--control);
   border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
-  transition: background var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
 }
 .opt:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--control-hover);
-  border-color: var(--accent-line);
+  background-color: var(--hover);
 }
-.opt:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.opt:active:not(:disabled) {
+  background-color: var(--press);
 }
+/* Ink edge + lift + weight. No tinted fill and no inset left marker: the fill
+   has to stay white so .opt__detail keeps 5.0:1 rather than dropping to
+   4.50:1, and the marker was a second vocabulary for a state the border
+   already states at 18.7:1. */
 .opt[aria-pressed='true'] {
   color: var(--ink);
-  background: var(--accent-soft);
+  background-color: var(--surface);
   border-color: var(--accent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 650;
+  box-shadow: var(--shadow-1);
+}
+.opt[aria-pressed='true']:hover:not(:disabled) {
+  background-color: var(--hover);
+}
+/* After the pressed rule, and for the same reason the button one is: the two
+   have equal specificity, and a selected option you cannot currently choose
+   has to say unavailable before it says selected. */
+.opt:disabled {
+  color: var(--muted);
+  background-color: var(--ground);
+  border-color: var(--line);
+  box-shadow: none;
+  cursor: not-allowed;
 }
 .opt--centre {
   text-align: center;
@@ -707,11 +931,18 @@ canvas {
 .opt--compact {
   min-height: var(--h-control-sm);
   font-size: var(--fs-1);
-  padding: 0 var(--s1);
+  padding: var(--s1) var(--s2);
   text-align: center;
+  border-radius: var(--r-sm);
 }
+/* Not yet real — a capture whose files are missing, a slot with nothing in it.
+   A dashed hairline is the reference's own vocabulary for a placeholder, and it
+   replaces a solid amber edge that made an ordinary "nothing here yet" look
+   like a fault report. The word is in the label; the border only echoes it. */
 .opt--pending {
-  border-color: var(--warn);
+  border-style: dashed;
+  border-color: var(--line-firm);
+  background-color: transparent;
 }
 
 .opt__label {
@@ -723,7 +954,7 @@ canvas {
 
 .opt__detail {
   display: block;
-  margin-top: 1px;
+  margin-top: var(--s1);
   font-size: var(--fs-1);
   font-weight: 450;
   color: var(--muted);
@@ -734,9 +965,11 @@ canvas {
  * ================================================================ */
 
 .field {
-  margin-bottom: var(--s3);
+  margin-bottom: var(--s4);
 }
 
+/* Bold value against grey label on one line — the type-weight contrast the
+   reference uses everywhere to separate a name from its reading. */
 .field__label {
   display: flex;
   align-items: baseline;
@@ -749,11 +982,16 @@ canvas {
 
 .field__value {
   color: var(--ink);
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
+/* White, not sunk. A field on --surface-sunk put its placeholder at 4.45:1;
+   on white the same --muted placeholder is 5.0:1, and it matches the
+   reference's white-card-on-grey-ground logic. */
 .input,
-.textarea {
+.textarea,
+select {
   display: block;
   width: 100%;
   min-height: var(--h-control);
@@ -761,10 +999,11 @@ canvas {
   font: inherit;
   font-size: var(--fs-2);
   color: var(--ink);
-  background: var(--surface-sunk);
+  background-color: var(--control);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
-  transition: border-color var(--t-fast) var(--ease-out),
+  transition: background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
     box-shadow var(--t-fast) var(--ease-out);
 }
 .textarea {
@@ -776,16 +1015,30 @@ canvas {
 .textarea::placeholder {
   color: var(--muted);
 }
-.input:focus,
-.textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+.input:hover:not(:disabled),
+.textarea:hover:not(:disabled),
+select:hover:not(:disabled) {
+  background-color: var(--control-hover);
 }
-.input:focus-visible,
-.textarea:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
+/* :focus, not only :focus-visible — a field that has the caret must say so
+   even when it was reached by click. The ring itself comes from the one global
+   focus rule; this is the edge underneath it. */
+.input:focus,
+.textarea:focus,
+select:focus {
+  border-color: var(--accent);
+}
+.input:disabled,
+.textarea:disabled,
+select:disabled {
+  color: var(--muted);
+  background-color: var(--ground);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+select {
+  cursor: pointer;
 }
 
 /* Range inputs are the two most-used controls in the waypoint panel, and the
@@ -796,42 +1049,76 @@ canvas {
   width: 100%;
   height: var(--h-control-sm);
   margin: 0;
-  background: transparent;
+  background-color: transparent;
   appearance: none;
   -webkit-appearance: none;
   cursor: pointer;
 }
-.range:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
 .range::-webkit-slider-runnable-track {
   height: 4px;
-  background: var(--control-hover);
+  background-color: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
   border-radius: var(--r-pill);
 }
 .range::-moz-range-track {
   height: 4px;
-  background: var(--control-hover);
+  background-color: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
   border-radius: var(--r-pill);
 }
+/* The thumb is the only place in the chrome that is solid ink at rest, because
+   it is the only control whose position is itself the value. 18.7:1 against
+   the white panel it rides over. */
 .range::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   width: 16px;
   height: 16px;
   margin-top: -6px;
-  background: var(--accent);
+  background-color: var(--accent);
   border: 2px solid var(--surface);
   border-radius: var(--r-pill);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
 }
 .range::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  background: var(--accent);
+  background-color: var(--accent);
   border: 2px solid var(--surface);
   border-radius: var(--r-pill);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
 }
+.range:hover:not(:disabled)::-webkit-slider-thumb {
+  background-color: var(--ink-soft);
+}
+.range:hover:not(:disabled)::-moz-range-thumb {
+  background-color: var(--ink-soft);
+}
+.range:active:not(:disabled)::-webkit-slider-thumb {
+  background-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+.range:active:not(:disabled)::-moz-range-thumb {
+  background-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+.range:disabled {
+  cursor: not-allowed;
+}
+.range:disabled::-webkit-slider-thumb {
+  background-color: var(--muted);
+  box-shadow: none;
+}
+.range:disabled::-moz-range-thumb {
+  background-color: var(--muted);
+  box-shadow: none;
+}
+/* The ring goes on the thumb, not on the full-width track, or the indicator is
+   a rectangle the size of the panel with the control somewhere inside it. */
 .range:focus-visible {
   outline: none;
 }
@@ -851,52 +1138,99 @@ canvas {
   align-items: center;
   gap: var(--s2);
   min-height: var(--h-control-sm);
-  padding: 0 var(--s1);
-  margin: 0 calc(-1 * var(--s1));
+  padding: 0 var(--s2);
+  margin: 0 calc(-1 * var(--s2));
   font-size: var(--fs-2);
   color: var(--ink-soft);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease-out),
-    color var(--t-fast) var(--ease-out);
+  transition: background-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
 }
 .check:hover {
   color: var(--ink);
-  background: var(--hover);
+  background-color: var(--hover);
 }
+.check:active {
+  background-color: var(--press);
+}
+/* The box gets the global ring, but the box is 15px in a 344px row — echoing it
+   on the row is what makes the keyboard position findable at a glance. */
+.check:focus-within {
+  background-color: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--line-firm);
+}
+.check:has(input:disabled) {
+  color: var(--muted);
+  background-color: transparent;
+  cursor: not-allowed;
+}
+/* The tick itself is near-black rather than the platform blue, inherited from
+   the accent-color set on body. */
 .check input {
   flex: none;
   width: 15px;
   height: 15px;
   margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
+  cursor: inherit;
 }
 
 /* ================================================================
  * Surfaces
+ *
+ * Pure white on the warm-grey ground, one hairline, almost no shadow, and a
+ * generous 16px corner. A card is separated from the page by the ground showing
+ * around it, not by a rule or a drop shadow.
  * ================================================================ */
 
 .card {
-  padding: var(--s3);
-  background: var(--surface-sunk);
+  padding: var(--s5);
+  background-color: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
 }
 
 .card--tight {
-  padding: var(--s2);
+  padding: var(--s3);
+  border-radius: var(--r-md);
 }
 
+/* Nothing here yet. Dashed hairline, no fill — the reference's drop-target
+   vocabulary, and it reads as "this will hold something" rather than as an
+   empty box that failed to load. */
+.card--dashed {
+  background-color: transparent;
+  border-style: dashed;
+  border-color: var(--line-firm);
+  color: var(--muted);
+}
+
+/* Recessed, for a readout sitting inside a card. Secondary text inside it must
+   be --ink-soft (9.3:1), never --muted, which is 4.45:1 on this fill. */
 .well {
-  padding: var(--s2) var(--s3);
-  background: var(--surface-sunk);
+  padding: var(--s3);
+  background-color: var(--surface-sunk);
   border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+}
+.well .meta,
+.well .opt__detail {
+  color: var(--ink-soft);
 }
 
-/* Inline state messages. All four share a shape so they read as one family,
-   and each states its severity in text as well as in colour. */
+/* ================================================================
+ * Notices — three tiers, and only one of them is allowed to shout
+ *
+ * An amber box around ordinary operation reads as a fault report, and this app
+ * had one on every routine remark about the route. So the severity of the
+ * BOX now tracks the severity of the event:
+ *   error   full treatment — a real failure, and the only tier with a fill
+ *   warn    outline only   — worth reading, not worth alarming about
+ *   info    no box at all  — it is a sentence, so it is set as one
+ * Every tier still states its severity in words as well as in colour.
+ * ================================================================ */
+
 .notice {
   display: flex;
   align-items: flex-start;
@@ -905,8 +1239,8 @@ canvas {
   padding: var(--s2) var(--s3);
   font-size: var(--fs-2);
   line-height: 1.5;
-  border: 1px solid;
-  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
 }
 .notice__icon {
   flex: none;
@@ -916,20 +1250,32 @@ canvas {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* 5.5:1 on the white panel, 4.9:1 on its own fill. The border is 1.5:1,
+   below the 3:1 a sole indicator would need — it is not the sole indicator:
+   the fill, the red text and the word carry it. */
 .notice--error {
   color: var(--danger);
-  background: var(--danger-soft);
+  background-color: var(--danger-soft);
   border-color: var(--danger-line);
 }
+
+/* Calm. Outline and text, no fill — the amber field is what made these read as
+   errors. 5.9:1 on --surface, 5.5:1 on --ground. */
 .notice--warn {
   color: var(--warn);
-  background: var(--warn-soft);
+  background-color: transparent;
   border-color: var(--warn-line);
 }
+
+/* Not a box. Routine remarks are prose, and 5.0:1 --muted is the same grey
+   every other piece of secondary text in the app is set in. */
 .notice--info {
-  color: var(--ink-soft);
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
+  padding: 0;
+  color: var(--muted);
+  background-color: transparent;
+  border-color: transparent;
+  border-radius: 0;
 }
 
 /* ================================================================
@@ -944,30 +1290,37 @@ canvas {
 .overlay {
   position: absolute;
   z-index: var(--z-overlay);
-  background: var(--surface);
+  background-color: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
+  /* The one place a real shadow is earned: this is genuinely floating over the
+     render, and the hairline alone cannot separate it from an arbitrary frame. */
   box-shadow: var(--shadow-2);
 }
 
 .overlay--top-left {
-  top: var(--s3);
-  left: var(--s3);
+  top: var(--s4);
+  left: var(--s4);
 }
 .overlay--top-right {
-  top: var(--s3);
-  right: var(--s3);
+  top: var(--s4);
+  right: var(--s4);
 }
 .overlay--bottom-left {
-  bottom: var(--s3);
-  left: var(--s3);
+  bottom: var(--s4);
+  left: var(--s4);
 }
 
 .overlay__pad {
-  padding: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   font-size: var(--fs-2);
 }
 
+/* The empty-stage message sits directly on the canvas, so the render behind it
+   can be any brightness and no single ink colour survives both a sunlit window
+   and a dark doorway. Ink plus a white halo does — the same treatment
+   app/styles/plan.css gives its own overlays, built here from --surface so the
+   halo and the panels stay one colour. */
 .stage__notice {
   position: absolute;
   inset: 0;
@@ -978,7 +1331,11 @@ canvas {
   gap: var(--s2);
   text-align: center;
   font-size: var(--fs-3);
-  color: var(--muted);
+  color: var(--ink);
+  text-shadow:
+    0 1px 2px var(--surface),
+    0 0 6px var(--surface),
+    0 0 12px var(--surface);
 }
 
 /* ================================================================
@@ -989,6 +1346,9 @@ canvas {
   width: 100%;
 }
 
+/* Was white-on-a-dark-shadow, from when the chrome was dark. The map is now an
+   overlay on the render with no panel behind it, so it takes the same ink-plus-
+   halo treatment as the rest of the plan overlay rather than inverting. */
 .minimap__head {
   display: flex;
   align-items: baseline;
@@ -996,20 +1356,27 @@ canvas {
   gap: var(--s2);
   padding: var(--s1) var(--s2) var(--s2);
   font-size: var(--fs-1);
-  color: var(--muted);
+  color: var(--ink-soft);
+  text-shadow:
+    0 1px 2px var(--surface),
+    0 0 6px var(--surface),
+    0 0 12px var(--surface);
 }
 
 .minimap__title {
   font-weight: 650;
-  color: var(--ink-soft);
+  color: var(--ink);
 }
 
 /* The border lives on the frame, not on the canvas: the draw code sizes the
    canvas from clientWidth, and a border-box border on the canvas itself makes
    the backing store 2px wider than the box it is painted into. */
 .minimap__frame {
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
+  /* No border and no card. The map is an overlay on the render, and a frame
+     around it turned it into a panel sitting on top of the scene rather than a
+     reading of the scene. */
+  position: relative;
+  border-radius: var(--r-md);
   overflow: hidden;
   line-height: 0;
 }
@@ -1020,12 +1387,19 @@ canvas {
   touch-action: none;
 }
 
-/* On /plan the map floats over the viewport, so it gets a panel of its own.
-   Without one it is a rectangle of diagram sitting directly on a photograph,
-   with nothing to say where the render stops and the instrument starts. */
+/* On /plan the map hovers in the corner of the viewport: no backdrop, no
+   padding to make room for one, so the plan sits directly on the render.
+   Pointer events stay on, because the map is also the place you click to drop
+   and drag waypoints. */
 .minimap-dock {
-  width: 316px;
-  padding: var(--s2);
+  position: absolute;
+  left: var(--s4);
+  bottom: var(--s4);
+  width: 300px;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
 }
 
 /* ================================================================
@@ -1049,6 +1423,13 @@ canvas {
 .dial__handle:active {
   cursor: grabbing;
 }
+/* An SVG handle does not inherit the global ring rule unless it is focusable,
+   and when it is, the ring has to be told to sit outside the 240×240 viewBox
+   clip rather than inside the handle. */
+.dial__handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 
 .dial__readout {
   font-size: var(--fs-1);
@@ -1058,21 +1439,30 @@ canvas {
 
 /* ================================================================
  * Scrub bar
+ *
+ * Four things share one 34px strip, so they are separated by VALUE rather than
+ * by hue, darkest last: the bare track is travel between shots, a wash marks a
+ * shot's dwell, a mid grey fills the elapsed part, and full ink is the head.
  * ================================================================ */
 
 .scrub {
   position: relative;
   height: 34px;
-  background: var(--surface-sunk);
+  background-color: var(--surface-sunk);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   overflow: hidden;
   touch-action: none;
   cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+.scrub:hover:not([aria-disabled='true'], .scrub--idle) {
+  border-color: var(--line-firm);
 }
 .scrub[aria-disabled='true'] {
+  background-color: var(--ground);
+  border-color: var(--line);
   cursor: not-allowed;
-  opacity: 0.6;
 }
 .scrub--idle {
   cursor: default;
@@ -1082,35 +1472,43 @@ canvas {
   outline-offset: 2px;
 }
 
+/* A shot: the camera is holding on something. */
 .scrub__seg {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--accent-soft);
+  background-color: var(--hover);
 }
+/* Travel: the bare track, so the two kinds of time are told apart by presence
+   rather than by two washes a viewer has to compare. */
 .scrub__seg--travel {
-  background: rgba(110, 168, 254, 0.05);
+  background-color: transparent;
 }
 .scrub__seg--split {
-  border-left: 1px solid var(--accent-line);
+  border-left: 1px solid var(--line-strong);
 }
 
+/* Progress. --line-firm is 3.1:1 against white and semi-transparent, so the
+   segment structure underneath still reads through the played part. */
 .scrub__elapsed {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  background: rgba(110, 168, 254, 0.26);
+  background-color: var(--line-firm);
   pointer-events: none;
 }
 
+/* A comment pin. The one amber left in the chrome, and it is a marker rather
+   than an alarm: it has to be findable against a strip built entirely from
+   greys, and ink would be indistinguishable from the playhead beside it. */
 .scrub__mark {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
   margin-left: -1px;
-  background: var(--warn);
+  background-color: var(--warn);
   pointer-events: none;
 }
 
@@ -1120,7 +1518,7 @@ canvas {
   bottom: 0;
   width: 2px;
   margin-left: -1px;
-  background: var(--ink);
+  background-color: var(--ink);
   pointer-events: none;
 }
 
@@ -1130,15 +1528,25 @@ canvas {
 
 .waypoint-list {
   display: grid;
-  gap: var(--s1);
+  gap: var(--s2);
   list-style: none;
 }
 
+/* A numbered step chip: small rounded square, light grey, tabular numerals so
+   1 and 11 start at the same x down a column. --ink-soft on --surface-sunk is
+   9.3:1. */
 .waypoint__index {
-  display: inline-block;
-  min-width: 1.4em;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  min-width: 2.2ch;
+  padding: 0 var(--s1);
+  font-size: var(--fs-1);
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  color: var(--ink);
+  color: var(--ink-soft);
+  background-color: var(--surface-sunk);
+  border-radius: var(--r-xs);
 }
 
 .waypoint__coords {
@@ -1152,10 +1560,10 @@ canvas {
 
 .comment {
   margin-bottom: var(--s2);
-  padding: var(--s2);
-  background: var(--surface-sunk);
+  padding: var(--s3);
+  background-color: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
 }
 
 .comment__head {
@@ -1165,6 +1573,7 @@ canvas {
   margin-bottom: var(--s1);
 }
 
+/* 10.4:1 on the white card. */
 .comment__text {
   font-size: var(--fs-2);
   line-height: 1.5;
@@ -1187,15 +1596,20 @@ canvas {
   flex: none;
   display: inline-grid;
   place-items: center;
-  width: 14px;
+  width: var(--s4);
 }
 
+/* Wide enough for the longest label ("Collider") without a hard pixel width, so
+   the column still lines up if a name is added. */
 .assets__name {
   flex: none;
-  width: 60px;
+  width: 8ch;
   color: var(--ink);
+  font-weight: 650;
 }
 
+/* Bold name, regular grey detail, one line — the type-weight pairing the
+   reference uses for every row of metadata. 5.0:1 on the white panel. */
 .assets__detail {
   flex: 1 1 auto;
   min-width: 0;
@@ -1207,85 +1621,35 @@ canvas {
  * Hub
  * ================================================================ */
 
-.hub {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: var(--s8) var(--s6);
-}
 
-.hub__title {
-  font-size: var(--fs-6);
-  margin-bottom: var(--s1);
-}
 
-.hub__lede {
-  margin-bottom: var(--s6);
-  font-size: var(--fs-4);
-  color: var(--muted);
-}
 
-.hub__list {
-  display: grid;
-  gap: var(--s2);
-}
 
-.hub__card {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s4);
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  transition: background var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out);
-}
-.hub__card:hover {
-  background: var(--control);
-  border-color: var(--accent-line);
-  text-decoration: none;
-}
+/* A card, so it takes the card's 16px corner, hairline and 20px padding rather
+   than a control's. --t-mid rather than --t-fast because it is a large surface:
+   the same 120ms that feels crisp on a 26px button reads as a flicker across a
+   600px card. */
 
-.hub__step {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  font-size: var(--fs-2);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: var(--r-pill);
-}
+/* A rounded-square chip, not a circle: it is an ordinal in a sequence, and the
+   square reads as "step 1 of n" where a circle reads as a bullet or an avatar.
+   --ink-soft on --surface-sunk is 9.3:1. */
 
-.hub__name {
-  display: block;
-  font-size: var(--fs-4);
-  font-weight: 650;
-}
 
-.hub__body {
-  display: block;
-  margin-top: 2px;
-  font-size: var(--fs-2);
-  line-height: 1.5;
-  color: var(--muted);
-}
+/* 5.0:1 on the white card. */
 
-.hub__chev {
-  color: var(--muted);
-}
+/* The one moving thing in the chrome. A chevron that steps forward on hover is
+   the cheapest way to say "this goes somewhere", and --s1 keeps even that on
+   the spacing scale. */
 
 /* ================================================================
  * Reduced motion
  *
- * Everything animated in this file is a hover or state hint. None of it
- * carries information on its own, so all of it is dropped rather than
- * shortened. The 3D viewport is content, not decoration, and is untouched:
- * the flythrough is the thing the tool exists to play.
+ * Everything animated in this file is a hover or state hint — a fill, an edge,
+ * a shadow, and one chevron that steps 4px. None of it carries information on
+ * its own, so all of it is dropped to effectively zero rather than shortened,
+ * and the chevron's transform is reset outright so it does not sit displaced.
+ * The 3D viewport is content, not decoration, and is untouched: the flythrough
+ * is the thing the tool exists to play.
  * ================================================================ */
 
 @media (prefers-reduced-motion: reduce) {
@@ -1297,6 +1661,7 @@ canvas {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
 }
 
 /* ================================================================
