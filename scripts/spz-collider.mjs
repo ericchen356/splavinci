@@ -320,6 +320,52 @@ function keepLargeComponents(mask, cols, rows, minFraction = 0.04) {
     blocked[c] = obstacleMask[c] && !Number.isNaN(terrain[c]) ? 1 : 0;
   }
 
+  // Keep only the largest connected WALKABLE region.
+  //
+  // Pruning the floor mask is not enough: obstacles then carve it into pieces,
+  // and a user who drops one waypoint in a marooned pocket gets "no walkable
+  // route" with no way to tell from looking at the map that the two areas were
+  // never connected. On this capture that was happening for roughly half of
+  // all waypoint pairs. Discarding the marooned pockets costs a little floor
+  // area and buys the guarantee that any two placeable points can be routed.
+  {
+    const walkable = new Uint8Array(cellCount);
+    for (let c = 0; c < cellCount; c++) {
+      walkable[c] = !Number.isNaN(terrain[c]) && !blocked[c] ? 1 : 0;
+    }
+    let best = -1;
+    let bestSize = 0;
+    const label = new Int32Array(cellCount).fill(-1);
+    const sizes = [];
+    const stack = [];
+    for (let seed = 0; seed < cellCount; seed++) {
+      if (!walkable[seed] || label[seed] !== -1) continue;
+      const id = sizes.length;
+      let size = 0;
+      stack.push(seed);
+      label[seed] = id;
+      while (stack.length) {
+        const cur = stack.pop();
+        size++;
+        const cx = cur % cols, cz = Math.floor(cur / cols);
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = cx + dx, nz = cz + dz;
+          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+          const nc = nz * cols + nx;
+          if (walkable[nc] && label[nc] === -1) { label[nc] = id; stack.push(nc); }
+        }
+      }
+      sizes.push(size);
+      if (size > bestSize) { bestSize = size; best = id; }
+    }
+    let dropped = 0;
+    for (let c = 0; c < cellCount; c++) {
+      if (walkable[c] && label[c] !== best) { terrain[c] = NaN; blocked[c] = 0; dropped++; }
+    }
+    console.log(`walkable connectivity: ${sizes.length} regions, kept the largest ` +
+                `(${bestSize} cells), dropped ${dropped} marooned cells`);
+  }
+
   let afterFloor = 0, afterBlocked = 0;
   for (let c = 0; c < cellCount; c++) {
     if (!Number.isNaN(terrain[c])) afterFloor++;

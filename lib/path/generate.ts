@@ -35,6 +35,7 @@ import {
   type WalkGrid,
 } from './grid';
 import { getWalkGrid } from './gridCache';
+import { resolveCameraRadius } from './grid';
 import { findPath, simplifyPath, type Cell } from './astar';
 import { buildCurve, easeInOut, DEFAULT_CURVE } from './curve';
 import { sampleShot, vec3, type ShotContext } from './motion';
@@ -173,6 +174,24 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   // WalkGrid.medianFloorY.
   const fallbackFloorY = grid.medianFloorY;
 
+  // Clearance is a hard gate, so the camera's body radius decides not just how
+  // wide its routes are but whether the space is connected at all. On a
+  // derived collider the corridors are whatever the density threshold left,
+  // and the default radius shattered one real capture into ten regions where a
+  // few centimetres less left it whole - so roughly half of all waypoint pairs
+  // came back "no walkable route" with nothing on screen to explain why.
+  const resolvedRadius = resolveCameraRadius(grid, opts.radius);
+  if (resolvedRadius.relaxed) {
+    warnings.push({
+      code: 'waypoint-snapped', severity: 'info', waypointIds: [],
+      message:
+        `Some parts of this capture are separated by gaps narrower than the ` +
+        `camera. Its clearance was eased from ${opts.radius.toFixed(2)} m to ` +
+        `${resolvedRadius.radius.toFixed(2)} m so the whole space stays reachable.`,
+    });
+  }
+  const radius = resolvedRadius.radius;
+
   /* ---- resolve every shot up front; travel timing depends on it ---- */
   const preset = STYLE_PRESETS[input.settings.style];
   const shots: ShotIntent[] = waypoints.map((w) =>
@@ -202,7 +221,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     // the key only needs to describe the geometry.
     const key = [
       'travel', a.id, b.id, positionKey(a), positionKey(b),
-      input.settings.style, round(opts.radius, 3), round(opts.cameraHeight, 3),
+      input.settings.style, round(radius, 3), round(opts.cameraHeight, 3),
     ].join('|');
 
     const hit = cache.legs.get(key);
@@ -212,7 +231,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       continue;
     }
 
-    const leg = computeLeg(grid, a, b, opts, fallbackFloorY, preset.metresPerSecond);
+    const leg = computeLeg(grid, a, b, { ...opts, radius }, fallbackFloorY, preset.metresPerSecond);
     recomputed++;
     cache.legs.set(key, leg);
     legs.push({ ...leg, cached: false });
@@ -297,7 +316,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       // frame; the shot falls back to its direction of travel.
       hasTarget: intent.targetDistance > 1e-6,
     };
-    const fitted = fitShotToRoom(grid, intent.shotType, ctx, opts.radius);
+    const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius);
     fittedShots.set(index, fitted);
     return fitted;
   };

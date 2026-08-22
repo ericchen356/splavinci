@@ -556,3 +556,111 @@ export function denseBounds(grid: WalkGrid, trim = 0.05): THREE.Box3 {
   }
   return box;
 }
+
+/**
+ * How many disconnected regions the camera can occupy at a given body radius,
+ * and what share of passable cells the largest one holds.
+ *
+ * Clearance is a hard gate in A*, so the radius does not merely make routes
+ * wider - past a threshold it severs the space. On a collider derived from a
+ * real capture the corridors are whatever the density threshold left behind,
+ * and the difference between a connected scene and a shattered one can be a
+ * few centimetres of radius. Callers use this to notice that before a user
+ * places two waypoints that can never be joined.
+ */
+export function passableConnectivity(
+  grid: WalkGrid,
+  radius: number,
+): { regions: number; largestShare: number; passableCells: number } {
+  const total = grid.cols * grid.rows;
+  const seen = new Uint8Array(total);
+  const stack: number[] = [];
+  let passableCells = 0;
+  let regions = 0;
+  let largest = 0;
+
+  const ok = (c: number, r: number) => isPassable(grid, c, r, radius);
+
+  for (let i = 0; i < total; i++) {
+    const c0 = i % grid.cols;
+    const r0 = (i / grid.cols) | 0;
+    if (!ok(c0, r0)) continue;
+    passableCells++;
+    if (seen[i]) continue;
+
+    regions++;
+    let size = 0;
+    seen[i] = 1;
+    stack.push(i);
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      size++;
+      const cx = cur % grid.cols;
+      const cz = (cur / grid.cols) | 0;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        if (!ok(nx, nz)) continue;
+        const ni = nz * grid.cols + nx;
+        if (seen[ni]) continue;
+        seen[ni] = 1;
+        stack.push(ni);
+      }
+    }
+    if (size > largest) largest = size;
+  }
+
+  // passableCells is only fully counted once the sweep finishes, so recount.
+  let confirmed = 0;
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) if (ok(c, r)) confirmed++;
+  }
+  return {
+    regions,
+    largestShare: confirmed > 0 ? largest / confirmed : 0,
+    passableCells: confirmed,
+  };
+}
+
+const connectivityCache = new WeakMap<WalkGrid, Map<number, ReturnType<typeof passableConnectivity>>>();
+
+/** Memoised `passableConnectivity`, keyed on the grid and the radius. */
+export function cachedConnectivity(grid: WalkGrid, radius: number) {
+  let byRadius = connectivityCache.get(grid);
+  if (!byRadius) {
+    byRadius = new Map();
+    connectivityCache.set(grid, byRadius);
+  }
+  const key = Math.round(radius * 1000);
+  const hit = byRadius.get(key);
+  if (hit) return hit;
+  const value = passableConnectivity(grid, radius);
+  byRadius.set(key, value);
+  return value;
+}
+
+/**
+ * Largest camera radius at or below `requested` that leaves the walkable space
+ * in one piece, or `minimum` if none does.
+ *
+ * A fixed radius cannot suit every capture: 0.30 m shattered one real scene
+ * into ten regions where 0.22 m left it whole, and a user placing waypoints in
+ * two different fragments just gets "no walkable route" with nothing on screen
+ * to explain why. Relaxing is reported, never silent.
+ */
+export function resolveCameraRadius(
+  grid: WalkGrid,
+  requested: number,
+  minimum = 0.1,
+): { radius: number; relaxed: boolean; regions: number } {
+  const at = cachedConnectivity(grid, requested);
+  if (at.regions <= 1) return { radius: requested, relaxed: false, regions: at.regions };
+
+  let radius = requested;
+  for (let step = 0; step < 12 && radius > minimum; step++) {
+    radius = Math.max(minimum, radius * 0.88);
+    const probe = cachedConnectivity(grid, radius);
+    if (probe.regions <= 1) return { radius, relaxed: true, regions: probe.regions };
+  }
+  return { radius: minimum, relaxed: true, regions: cachedConnectivity(grid, minimum).regions };
+}
