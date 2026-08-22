@@ -64,7 +64,11 @@ export const DEFAULT_GENERATE: GenerateOptions = {
   fps: 30,
   cameraHeight: DEFAULT_CURVE.cameraHeight,
   radius: DEFAULT_CURVE.radius,
-  maxTurnRateDegPerSec: 200,
+  // A whip pan is 200+ deg/s; a smooth operated pan is 10-40. The old ceiling
+  // was so high that it never shaped anything - measured, the 95th percentile
+  // turn sat exactly ON it, so the limiter was setting the speed of nearly
+  // every turn in the flythrough, at whip speed.
+  maxTurnRateDegPerSec: 80,
 };
 
 export type PathInput = {
@@ -434,7 +438,15 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
 
       const fromLook = exitPose.lookAt.clone();
       const toLook = entryPose.lookAt.clone();
-      const blendSpan = blendFractionFor(leg.duration);
+      // The position correction fades across the WHOLE leg, not a fixed 0.45s.
+      //
+      // Reconciling the shot's exit pose with the curve's start means moving
+      // the camera an extra distance; doing that inside a short window injects
+      // a transient velocity and then removes it. Measured on a 2s leg, speed
+      // ran 0.92 -> 1.76 m/s as the correction wound down and 1.83 -> 0.84 as
+      // the next one wound up - two lurches with smooth motion between them.
+      // Spread over the leg the same displacement is a drift of a few cm/s.
+      const blendSpan = 1;
       // A short leg cannot give 45% twice over without the two turns swamping
       // it, so the look blend is capped a little under half.
       const lookSpan = Math.min(0.48, Math.max(blendSpan, LOOK_BLEND_FRACTION));
@@ -604,15 +616,27 @@ function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: numb
     }
     want.divideScalar(distance);
 
+    // Keep the camera near level. Nothing is framed by pointing at bare
+    // ceiling or bare floor, and an unconstrained turn could tip through
+    // vertical on its way round - the camera reversing by pitching over
+    // backwards instead of turning on the spot.
+    const elevation = Math.asin(Math.max(-1, Math.min(1, want.y)));
+    if (Math.abs(elevation) > MAX_PITCH) {
+      const capped = Math.sign(elevation) * MAX_PITCH;
+      const horizontal = Math.hypot(want.x, want.z) || 1;
+      const scale = Math.cos(capped) / horizontal;
+      want.set(want.x * scale, Math.sin(capped), want.z * scale).normalize();
+    }
+
     const dot = Math.min(1, Math.max(-1, prev.dot(want)));
     const angle = Math.acos(dot);
     if (angle > maxStep) {
       axis.crossVectors(prev, want);
-      if (axis.lengthSq() < 1e-12) {
-        // Exactly opposed: any perpendicular axis is as good as another.
-        axis.set(0, 1, 0).cross(prev);
-        if (axis.lengthSq() < 1e-12) axis.set(1, 0, 0).cross(prev);
-      }
+      // Near-opposed directions leave the cross product ill-defined, and any
+      // perpendicular will do mathematically - but only one of them looks
+      // right. Turning about world up is a pan; the alternatives roll or pitch
+      // the camera through vertical to get to the same place.
+      if (axis.lengthSq() < 1e-8) axis.set(0, 1, 0);
       axis.normalize();
       want.copy(prev).applyAxisAngle(axis, maxStep).normalize();
       clamped++;
@@ -850,6 +874,9 @@ function shotTranslates(shotType: ShotType): boolean {
   return shotType !== 'hold';
 }
 
+/** How far off level the view may point. Beyond this there is only ceiling or floor. */
+const MAX_PITCH = (28 * Math.PI) / 180;
+
 /** Smallest reach assumed when sizing the shot clip test, in metres. */
 const AMPLITUDE_REACH_FLOOR = 1.8;
 
@@ -911,7 +938,10 @@ function blendOut(e: number, span: number): number {
   if (e <= 0) return 1;
   if (e >= span) return 0;
   const x = 1 - e / span;
-  return x * x * (3 - 2 * x);
+  // Smootherstep, not smoothstep: zero SECOND derivative at both ends as well
+  // as zero first. Smoothstep leaves an acceleration step where the fade
+  // begins and ends, which is felt even though the velocity is continuous.
+  return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
 /**

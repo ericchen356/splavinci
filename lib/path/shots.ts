@@ -46,19 +46,45 @@ export type StylePreset = {
   dwell: number;
   /** Default move amplitude at the fully-auto end. */
   intensity: number;
-  /** Extra seconds of settle added between moves. */
-  settle: number;
+  /**
+   * Which shot the auto rule reaches for in each situation.
+   *
+   * Without this a style was only a tempo: all four produced the identical
+   * sequence on the identical route and differed solely in how long it took.
+   * A style is a way of covering a space, not a speed setting, so it chooses
+   * the vocabulary and the geometry decides where each one applies.
+   */
+  nearWall: ShotType;
+  openFloor: ShotType;
 };
 
 export const STYLE_PRESETS: Record<PathStyle, StylePreset> = {
-  // Slow and lingering; the camera is in no hurry.
-  cozy: { metresPerSecond: 0.75, dwell: 1.25, intensity: 0.8, settle: 0.35 },
-  // Brisk and even. Covers ground, never dawdles, never rushes.
-  realEstate: { metresPerSecond: 1.15, dwell: 0.9, intensity: 0.7, settle: 0.15 },
-  // Slowest and widest. Big moves, long holds.
-  cinematic: { metresPerSecond: 0.62, dwell: 1.55, intensity: 1.0, settle: 0.5 },
-  // Fast tour. Short shots, small moves.
-  quick: { metresPerSecond: 1.9, dwell: 0.55, intensity: 0.5, settle: 0.05 },
+  // Intimate. Moves in on things and lingers; the camera behaves like someone
+  // looking closely rather than surveying.
+  cozy: {
+    metresPerSecond: 0.75, dwell: 1.25, intensity: 0.8,
+    // Not `hold` in the open: an all-hold style parks the camera at every
+    // waypoint, which is the standstill problem this pipeline already had once.
+    // Easing back off a subject reads warm and keeps the camera alive.
+    nearWall: 'push-in', openFloor: 'pull-back',
+  },
+  // Comprehensive. The job is to show the whole space clearly, so it sweeps
+  // the open rooms and steps in on detail.
+  realEstate: {
+    metresPerSecond: 1.15, dwell: 0.9, intensity: 0.7,
+    nearWall: 'push-in', openFloor: 'pan',
+  },
+  // Dramatic. Reaches for the moves that carry scale - around a subject in the
+  // open, and up the face of whatever it is standing near.
+  cinematic: {
+    metresPerSecond: 0.62, dwell: 1.55, intensity: 1.0,
+    nearWall: 'rise', openFloor: 'orbit',
+  },
+  // Efficient. Keeps travelling and does not stop to perform.
+  quick: {
+    metresPerSecond: 1.9, dwell: 0.55, intensity: 0.5,
+    nearWall: 'dolly-through', openFloor: 'dolly-through',
+  },
 };
 
 /**
@@ -299,7 +325,10 @@ export function readWall(grid: WalkGrid, position: Vec3): WallReading {
  * nothing here needs to know what the room contains, only its shape, so it
  * behaves the same on a capture we have never seen.
  */
-export function inferShotType(reading: WallReading | null): { shotType: ShotType; reason: string } {
+export function inferShotType(
+  reading: WallReading | null,
+  preset: StylePreset,
+): { shotType: ShotType; reason: string } {
   if (!reading) {
     // No grid yet - nothing measured, so do not invent a move.
     return { shotType: 'hold', reason: 'no collider yet - holding in place' };
@@ -307,8 +336,8 @@ export function inferShotType(reading: WallReading | null): { shotType: ShotType
   const metres = reading.clearance.toFixed(1);
   if (reading.openness < WALL_OPENNESS_CROSSOVER && reading.wallPoint) {
     return {
-      shotType: 'push-in',
-      reason: `${metres} m from the nearest wall - move in on it`,
+      shotType: preset.nearWall,
+      reason: `${metres} m from the nearest wall - ${VERB[preset.nearWall]}`,
     };
   }
   if (reading.openness < WALL_OPENNESS_CROSSOVER) {
@@ -317,10 +346,21 @@ export function inferShotType(reading: WallReading | null): { shotType: ShotType
     return { shotType: 'hold', reason: `tight spot (${metres} m clear) - hold` };
   }
   return {
-    shotType: 'pan',
-    reason: `open floor (${metres} m clear) - wide pan across the room`,
+    shotType: preset.openFloor,
+    reason: `open floor (${metres} m clear) - ${VERB[preset.openFloor]}`,
   };
 }
+
+/** How each shot reads in the panel's one-line justification. */
+const VERB: Record<ShotType, string> = {
+  orbit: 'move around it',
+  'push-in': 'move in on it',
+  'pull-back': 'pull back from it',
+  pan: 'sweep across the room',
+  'dolly-through': 'keep travelling through',
+  rise: 'lift along it',
+  hold: 'hold on it',
+};
 
 /** Inferred shot length: the more open the stop, the longer the look. */
 export function inferDuration(
@@ -377,7 +417,7 @@ export function resolveShot(
   const manual = waypoint.mode === 'manual';
 
   const reading = grid ? readWall(grid, waypoint.position) : null;
-  const inferred = inferShotType(reading);
+  const inferred = inferShotType(reading, preset);
   const autoShotType = inferred.shotType;
   const autoDuration = inferDuration(autoShotType, reading, preset);
 
