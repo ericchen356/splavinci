@@ -189,6 +189,153 @@ for (let c = 0; c < cellCount; c++) {
 console.log(`floor cells ${floorCells.toLocaleString()}, blocked ${blockedCells.toLocaleString()} ` +
             `(${(100 * blockedCells / Math.max(1, floorCells)).toFixed(1)}%)`);
 
+
+/* --------------------------- grid morphology ------------------------------ */
+/**
+ * Per-cell thresholding decides each cell in isolation, so it produces speckle:
+ * lone cells that crossed a threshold, pinholes where a cell just missed, and
+ * fringe islands far from anything. Read as a floor plan that looks like random
+ * blobs rather than a room. Real floors are spatially coherent, so the mask
+ * gets the standard treatment - close small holes, open away specks, then drop
+ * components too small to be part of the building.
+ */
+function dilate(mask, cols, rows, radius = 1) {
+  const out = new Uint8Array(mask.length);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      let on = 0;
+      for (let dz = -radius; dz <= radius && !on; dz++) {
+        for (let dx = -radius; dx <= radius && !on; dx++) {
+          const nx = c + dx, nz = r + dz;
+          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+          if (mask[nz * cols + nx]) on = 1;
+        }
+      }
+      out[r * cols + c] = on;
+    }
+  }
+  return out;
+}
+
+function erode(mask, cols, rows, radius = 1) {
+  const out = new Uint8Array(mask.length);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      let all = 1;
+      for (let dz = -radius; dz <= radius && all; dz++) {
+        for (let dx = -radius; dx <= radius && all; dx++) {
+          const nx = c + dx, nz = r + dz;
+          // Outside the grid counts as set, so the map edge is not eaten away.
+          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+          if (!mask[nz * cols + nx]) all = 0;
+        }
+      }
+      out[r * cols + c] = all;
+    }
+  }
+  return out;
+}
+
+const close = (m, cols, rows, r = 1) => erode(dilate(m, cols, rows, r), cols, rows, r);
+const open = (m, cols, rows, r = 1) => dilate(erode(m, cols, rows, r), cols, rows, r);
+
+/** Drop connected components smaller than `minFraction` of the set cells. */
+function keepLargeComponents(mask, cols, rows, minFraction = 0.04) {
+  const label = new Int32Array(mask.length).fill(-1);
+  const sizes = [];
+  const stack = [];
+  let total = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) total++;
+
+  for (let seed = 0; seed < mask.length; seed++) {
+    if (!mask[seed] || label[seed] !== -1) continue;
+    const id = sizes.length;
+    let size = 0;
+    stack.push(seed);
+    label[seed] = id;
+    while (stack.length) {
+      const c = stack.pop();
+      size++;
+      const cx = c % cols, cz = Math.floor(c / cols);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx, nz = cz + dz;
+        if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+        const nc = nz * cols + nx;
+        if (mask[nc] && label[nc] === -1) { label[nc] = id; stack.push(nc); }
+      }
+    }
+    sizes.push(size);
+  }
+
+  const floor = Math.max(4, total * minFraction);
+  const out = new Uint8Array(mask.length);
+  let kept = 0;
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i] && sizes[label[i]] >= floor) { out[i] = 1; kept++; }
+  }
+  return { mask: out, kept, components: sizes.length };
+}
+
+/* ------------------------ clean up the raw masks -------------------------- */
+{
+  const before = { floor: 0, blocked: 0 };
+  for (let c = 0; c < cellCount; c++) {
+    if (!Number.isNaN(terrain[c])) before.floor++;
+    if (blocked[c]) before.blocked++;
+  }
+
+  // Floor coverage: close pinholes, then discard fringe islands. A cell that
+  // just missed the splat threshold but is surrounded by floor is floor.
+  let dataMask = new Uint8Array(cellCount);
+  for (let c = 0; c < cellCount; c++) dataMask[c] = Number.isNaN(terrain[c]) ? 0 : 1;
+  dataMask = close(dataMask, cols, rows, 1);
+  const { mask: kept, components } = keepLargeComponents(dataMask, cols, rows, 0.04);
+  dataMask = kept;
+
+  // Cells the close() added have no height yet. Grow heights into them from
+  // their neighbours rather than inventing a value: terrain is continuous, so
+  // an average of what is already known is the honest estimate.
+  for (let pass = 0; pass < 4; pass++) {
+    let filled = 0;
+    for (let c = 0; c < cellCount; c++) {
+      if (!dataMask[c] || !Number.isNaN(terrain[c])) continue;
+      const cx = c % cols, cz = Math.floor(c / cols);
+      let sum = 0, n = 0;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = cx + dx, nz = cz + dz;
+          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+          const t = terrain[nz * cols + nx];
+          if (!Number.isNaN(t)) { sum += t; n++; }
+        }
+      }
+      if (n > 0) { terrain[c] = sum / n; filled++; }
+    }
+    if (filled === 0) break;
+  }
+  // Anything outside the kept mask is not floor.
+  for (let c = 0; c < cellCount; c++) if (!dataMask[c]) terrain[c] = NaN;
+
+  // Obstacles: drop lone cells, then close the gaps inside walls so a wall
+  // reads as a continuous run rather than a dotted line.
+  let obstacleMask = Uint8Array.from(blocked);
+  obstacleMask = open(obstacleMask, cols, rows, 1);
+  obstacleMask = close(obstacleMask, cols, rows, 1);
+  for (let c = 0; c < cellCount; c++) {
+    // An obstacle only counts where there is floor to stand on beside it.
+    blocked[c] = obstacleMask[c] && !Number.isNaN(terrain[c]) ? 1 : 0;
+  }
+
+  let afterFloor = 0, afterBlocked = 0;
+  for (let c = 0; c < cellCount; c++) {
+    if (!Number.isNaN(terrain[c])) afterFloor++;
+    if (blocked[c]) afterBlocked++;
+  }
+  console.log(`cleanup: floor ${before.floor} -> ${afterFloor}, ` +
+              `blocked ${before.blocked} -> ${afterBlocked}, ` +
+              `${components} components before pruning`);
+}
+
 /* ------------------------------- emit glb --------------------------------- */
 
 mkdirSync(outDir, { recursive: true });
