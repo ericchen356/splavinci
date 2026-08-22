@@ -15,7 +15,9 @@ import { create } from 'zustand';
 import type { SceneObject } from '@/lib/types';
 import {
   getActiveAssetSetId,
+  getActiveQualityId,
   setActiveAssetSet,
+  setActiveQuality,
   type AssetSet,
   getAssetSet,
 } from '@/lib/assets';
@@ -67,6 +69,8 @@ export type RoomStore = {
   assetSetId: string;
   /** The active set's full definition, including the splat placement. */
   assetSet: AssetSet;
+  /** Chosen density variant for the active capture, or null if it has none. */
+  qualityId: string | null;
   splat: SplatState;
   collider: ColliderState;
   objects: ObjectsState;
@@ -86,6 +90,8 @@ export type RoomStore = {
   reloadRoom(): Promise<void>;
   /** Switch capture and reload. No-op when already active. */
   switchAssetSet(id: string): Promise<void>;
+  /** Switch density. Only the splat reloads - collider and objects are shared. */
+  switchQuality(id: string): Promise<void>;
 
   /* Splat status is pushed in by the R3F layer, which owns the Spark objects. */
   beginSplat(): Promise<string | null>;
@@ -97,6 +103,7 @@ export type RoomStore = {
 export const useRoomStore = create<RoomStore>((set, get) => ({
   assetSetId: getActiveAssetSetId(),
   assetSet: getAssetSet(),
+  qualityId: getActiveQualityId(),
   splat: INITIAL_SPLAT,
   collider: INITIAL_COLLIDER,
   objects: INITIAL_OBJECTS,
@@ -123,8 +130,18 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
 
   async switchAssetSet(id) {
     if (!setActiveAssetSet(id)) return;
-    set({ assetSetId: id, assetSet: getAssetSet(id) });
+    set({ assetSetId: id, assetSet: getAssetSet(id), qualityId: getActiveQualityId() });
     return get().reloadRoom();
+  },
+
+  async switchQuality(id) {
+    if (!setActiveQuality(id)) return;
+    // Only the splat changes. The collider and manifest describe the same
+    // scene at any density, so reloading them would just re-download and
+    // re-parse identical bytes - and would throw away the parsed collider the
+    // path generator's grid cache is keyed on.
+    splatResolution = null;
+    set({ qualityId: getActiveQualityId(), splat: INITIAL_SPLAT });
   },
 
   async reloadRoom() {

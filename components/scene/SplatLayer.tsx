@@ -33,6 +33,12 @@ export function SplatLayer({
   const scene = useThree((s) => s.scene);
   const [mesh, setMesh] = useState<SplatMesh | null>(null);
 
+  // Which capture and which density are loaded. These are effect dependencies,
+  // not just display state: the store actions below are stable references, so
+  // without them the effect would never re-run and switching capture or
+  // density would leave the previous splat cloud on screen.
+  const assetSetId = useRoomStore((s) => s.assetSetId);
+  const qualityId = useRoomStore((s) => s.qualityId);
   const beginSplat = useRoomStore((s) => s.beginSplat);
   const setSplatProgress = useRoomStore((s) => s.setSplatProgress);
   const setSplatLoaded = useRoomStore((s) => s.setSplatLoaded);
@@ -87,7 +93,7 @@ export function SplatLayer({
       created?.dispose();
       setMesh(null);
     };
-  }, [beginSplat, setSplatProgress, setSplatLoaded, setSplatFailed]);
+  }, [assetSetId, qualityId, beginSplat, setSplatProgress, setSplatLoaded, setSplatFailed]);
 
   useEffect(() => {
     if (mesh) mesh.opacity = opacity;

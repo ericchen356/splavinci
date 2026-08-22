@@ -7,28 +7,29 @@
  * and /review can mount the same room under a camera rig of their own.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { RoomScene } from '@/components/scene/RoomScene';
 import { CapturePicker } from '@/components/scene/CapturePicker';
 import {
   CameraRig,
   CameraPresetDriver,
-  CAMERA_PRESETS,
+  derivePresets,
   type CameraMode,
   type CameraPreset,
 } from '@/components/scene/CameraRig';
 import { AssetStatusPanel } from '@/components/scene/AssetStatusPanel';
 import { useRoomAssets } from '@/lib/scene/useRoomAssets';
+import { denseBounds, getWalkGrid } from '@/lib/path';
 import type { Vec3 } from '@/lib/types';
 
-const INITIAL_PRESET = CAMERA_PRESETS[0];
+
 
 export default function ScenePage() {
   const assets = useRoomAssets();
 
   const [mode, setMode] = useState<CameraMode>('orbit');
-  const [preset, setPreset] = useState<CameraPreset>(INITIAL_PRESET);
+  const [presetId, setPresetId] = useState('interior');
   const [presetNonce, setPresetNonce] = useState(0);
   const [showObjects, setShowObjects] = useState(true);
   const [showSplat, setShowSplat] = useState(true);
@@ -36,7 +37,24 @@ export default function ScenePage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [probe, setProbe] = useState<{ point: Vec3; floorY: number | null } | null>(null);
 
+  // Framed from where the capture actually has data, so any scene gets usable
+  // viewpoints. Deliberately denseBounds rather than the collider's full
+  // extent: a derived collider has scattered fringe coverage, and centring on
+  // the raw extent points the camera at empty space beside the real content.
+  const presets = useMemo(() => {
+    if (!assets.colliderData) return derivePresets(null, 0);
+    const grid = getWalkGrid(assets.colliderData);
+    const box = denseBounds(grid);
+    return derivePresets(box, box.min.y);
+  }, [assets.colliderData]);
+  const preset = presets.find((p) => p.id === presetId) ?? presets[0];
   const orbitTarget = preset.target;
+
+  // Re-frame when the collider lands or the capture changes; without this the
+  // camera keeps whatever pose suited the previous room.
+  useEffect(() => {
+    if (assets.roomBounds) setPresetNonce((n) => n + 1);
+  }, [assets.roomBounds, assets.assetSetId]);
 
   const highlighted = useMemo(
     () => [hovered, selected].filter((x): x is string => Boolean(x)),
@@ -44,7 +62,7 @@ export default function ScenePage() {
   );
 
   const applyPreset = (next: CameraPreset) => {
-    setPreset(next);
+    setPresetId(next.id);
     setPresetNonce((n) => n + 1);
   };
 
@@ -57,7 +75,7 @@ export default function ScenePage() {
         // Gaussian splats and costs a lot of fill rate.
         gl={{ antialias: false }}
         dpr={[1, 2]}
-        camera={{ position: INITIAL_PRESET.position, fov: 60, near: 0.05, far: 300 }}
+        camera={{ position: preset.position, fov: 60, near: 0.05, far: 2000 }}
         style={{ background: 'var(--bg)' }}
       >
         <CameraRig mode={mode} target={orbitTarget} />
@@ -119,7 +137,7 @@ export default function ScenePage() {
             onChange={(next) => setMode(next as CameraMode)}
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            {CAMERA_PRESETS.map((p) => (
+            {presets.map((p) => (
               <button
                 key={p.id}
                 type="button"

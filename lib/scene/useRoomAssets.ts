@@ -13,7 +13,7 @@
 import { useEffect, useMemo } from 'react';
 import type * as THREE from 'three';
 import type { SceneObject, Vec3 } from '@/lib/types';
-import type { AssetSet } from '@/lib/assets';
+import { readSavedAssetSetId, type AssetSet } from '@/lib/assets';
 import type { ColliderData } from './collider';
 import type {
   ColliderState,
@@ -29,6 +29,8 @@ export type RoomAssets = {
   assetSetId: string;
   assetSet: AssetSet;
   switchAssetSet(id: string): void;
+  qualityId: string | null;
+  switchQuality(id: string): void;
 
   /* --- raw per-asset state, for honest status UI --- */
   splat: SplatState;
@@ -76,6 +78,9 @@ export type RoomAssets = {
   reload(): void;
 };
 
+/** Module-scoped: the restore should happen once per page load, not per screen. */
+let restoredFromStorage = false;
+
 function isSettled(phase: string): boolean {
   return phase === 'loaded' || phase === 'failed';
 }
@@ -84,6 +89,8 @@ export function useRoomAssets(): RoomAssets {
   const assetSetId = useRoomStore((s) => s.assetSetId);
   const assetSet = useRoomStore((s) => s.assetSet);
   const switchAssetSet = useRoomStore((s) => s.switchAssetSet);
+  const qualityId = useRoomStore((s) => s.qualityId);
+  const switchQuality = useRoomStore((s) => s.switchQuality);
   const splat = useRoomStore((s) => s.splat);
   const collider = useRoomStore((s) => s.collider);
   const objects = useRoomStore((s) => s.objects);
@@ -95,6 +102,17 @@ export function useRoomAssets(): RoomAssets {
   const toggleCollider = useRoomStore((s) => s.toggleCollider);
 
   useEffect(() => {
+    // Restore the persisted capture here rather than at module scope, so the
+    // first client render matches the server's. Guarded so only the first
+    // screen to mount does it - switching reloads every asset.
+    if (!restoredFromStorage) {
+      restoredFromStorage = true;
+      const saved = readSavedAssetSetId();
+      if (saved && saved !== useRoomStore.getState().assetSetId) {
+        void useRoomStore.getState().switchAssetSet(saved);
+        return;
+      }
+    }
     void loadRoom();
   }, [loadRoom]);
 
@@ -113,6 +131,8 @@ export function useRoomAssets(): RoomAssets {
       assetSetId,
       assetSet,
       switchAssetSet: (id: string) => void switchAssetSet(id),
+      qualityId,
+      switchQuality: (id: string) => void switchQuality(id),
 
       splat,
       collider,
@@ -142,6 +162,8 @@ export function useRoomAssets(): RoomAssets {
     assetSetId,
     assetSet,
     switchAssetSet,
+    qualityId,
+    switchQuality,
     splat,
     collider,
     objects,

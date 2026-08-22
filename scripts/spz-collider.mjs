@@ -135,6 +135,42 @@ for (let c = 0; c < cellCount; c++) {
   bandCount[c] = inBand;
 }
 
+// Reject terrain outliers before anything downstream trusts them.
+//
+// A cell with only a handful of splats can have its height percentile land on
+// a floater metres above the ground, and one bad cell becomes a spike of
+// "floor" that distorts camera framing and gives A* a staircase to nowhere.
+// Comparing each cell against the median of its neighbours catches those
+// without flattening genuine terrain, which varies smoothly between adjacent
+// cells by construction.
+{
+  const MAX_NEIGHBOUR_DEVIATION = Number(process.env.MAX_TERRAIN_DEVIATION ?? 2.5);
+  for (let pass = 0; pass < 2; pass++) {
+    const rejected = [];
+    for (let c = 0; c < cellCount; c++) {
+      if (Number.isNaN(terrain[c])) continue;
+      const cx = c % cols, cz = Math.floor(c / cols);
+      const around = [];
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const nx = cx + dx, nz = cz + dz;
+          if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+          const t = terrain[nz * cols + nx];
+          if (!Number.isNaN(t)) around.push(t);
+        }
+      }
+      if (around.length < 3) { rejected.push(c); continue; }
+      around.sort((a, b) => a - b);
+      const median = around[Math.floor(around.length / 2)];
+      if (Math.abs(terrain[c] - median) > MAX_NEIGHBOUR_DEVIATION) rejected.push(c);
+    }
+    for (const c of rejected) terrain[c] = NaN;
+    console.log(`terrain outlier pass ${pass + 1}: rejected ${rejected.length} cells`);
+    if (rejected.length === 0) break;
+  }
+}
+
 // Lift so the median ground sits at y = 0.
 const validTerrain = [];
 for (let c = 0; c < cellCount; c++) if (!Number.isNaN(terrain[c])) validTerrain.push(terrain[c]);

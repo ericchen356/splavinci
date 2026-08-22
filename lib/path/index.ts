@@ -10,7 +10,7 @@
 export {
   buildWalkGrid, deriveCellSize, gridStats,
   cellIndex, cellToWorld, worldToCell, inGrid,
-  isWalkable, isPassable, findNearestCell, floorYAtCell, hasLineOfSight,
+  isWalkable, isPassable, findNearestCell, floorYAtCell, hasLineOfSight, denseBounds,
   type WalkGrid, type GridOptions,
 } from './grid';
 

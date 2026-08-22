@@ -456,3 +456,53 @@ export function gridStats(grid: WalkGrid): {
   }
   return { cells: grid.floor.length, floorCells, blockedCells, walkableCells };
 }
+
+/**
+ * Bounds of the region that actually has walkable data, trimmed to a central
+ * percentile of the walkable cells.
+ *
+ * The collider's own bounding box is a poor thing to frame a camera on. A
+ * capture derived from real splats has scattered fringe coverage - a few cells
+ * of ground picked up far from anywhere - and the full extent is mostly empty
+ * space around a much smaller pocket of real content. Centring on that extent
+ * points the camera at nothing. Trimming to the middle 90% of walkable cells
+ * lands on the part of the scene a person would call "the scene".
+ */
+export function denseBounds(grid: WalkGrid, trim = 0.05): THREE.Box3 {
+  const xs: number[] = [];
+  const zs: number[] = [];
+  let minFloorY = Infinity;
+  let maxFloorY = -Infinity;
+
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const i = cellIndex(grid, c, r);
+      if (!grid.floor[i] || grid.blocked[i]) continue;
+      const { x, z } = cellToWorld(grid, c, r);
+      xs.push(x);
+      zs.push(z);
+      const y = grid.floorY[i];
+      if (!Number.isNaN(y)) {
+        if (y < minFloorY) minFloorY = y;
+        if (y > maxFloorY) maxFloorY = y;
+      }
+    }
+  }
+
+  if (xs.length === 0) return grid.bounds.clone();
+
+  xs.sort((a, b) => a - b);
+  zs.sort((a, b) => a - b);
+  const lo = (arr: number[]) => arr[Math.floor(trim * (arr.length - 1))];
+  const hi = (arr: number[]) => arr[Math.ceil((1 - trim) * (arr.length - 1))];
+
+  const box = new THREE.Box3(
+    new THREE.Vector3(lo(xs), Number.isFinite(minFloorY) ? minFloorY : grid.bounds.min.y, lo(zs)),
+    new THREE.Vector3(hi(xs), Number.isFinite(maxFloorY) ? maxFloorY : grid.bounds.max.y, hi(zs)),
+  );
+  // Never return something degenerate; a zero-extent box breaks framing maths.
+  if (box.max.x - box.min.x < grid.cellSize || box.max.z - box.min.z < grid.cellSize) {
+    return grid.bounds.clone();
+  }
+  return box;
+}
