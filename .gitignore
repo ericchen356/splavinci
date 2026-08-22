@@ -21,3 +21,6 @@ public/hobbiton/
 public/derived/
 
 public/generated/
+
+# derived from a source video by scripts/video-frames.swift
+samples/*/frames/

@@ -153,6 +153,22 @@ export const COHERENCE_CLAUSE =
  * the result is a copy of somebody else's flat wearing the requested layout
  * badly. The photographs are here for material, colour and light.
  */
+/**
+ * The sentence for frames of one real space, where copying IS the job.
+ *
+ * The exact inverse of INSPIRATION_CLAUSE, and it has to be, because the two
+ * modes want opposite things from the same field. Under 'inspiration' the
+ * photographs are somebody else's flat and reproducing them is the failure;
+ * under 'views' they are a walk through the room being captured and
+ * reproducing them is the entire point. Sending the inspiration wording with a
+ * set of video frames tells Marble to discard the only real evidence it has.
+ */
+export const RECONSTRUCTION_CLAUSE =
+  'These photographs are views of one real space, taken while moving through ' +
+  'it. Reconstruct that space faithfully from them — keep its proportions, its ' +
+  'surfaces and the position of everything in it, and use the description only ' +
+  'to resolve what the photographs do not show';
+
 export const INSPIRATION_CLAUSE =
   'Use the photograph only as a guide to materials, colour palette and quality ' +
   'of light; do not reproduce its room, its proportions or its furniture ' +
@@ -303,7 +319,7 @@ export async function composeIntake(
     `The layout is ${clean(described).replace(/^the layout is\s+/i, '')}`,
     envelope,
     keywords,
-    images.length > 0 ? INSPIRATION_CLAUSE : null,
+    images.length === 0 ? null : role === 'views' ? RECONSTRUCTION_CLAUSE : INSPIRATION_CLAUSE,
   ]);
 
   return {

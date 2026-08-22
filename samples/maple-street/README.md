@@ -15,25 +15,33 @@ path has to handle most often.
 | file | what it is |
 |---|---|
 | `blueprint.png`, `blueprint.svg` | The floor plan. Drawn by `node scripts/make-blueprint.mjs maple-street`; the geometry lives in that script, not in the image. |
-| `intake.json` | The whole experiment: layout sentence, keywords, anchor, photo list. Consumed by `scripts/render-scene.ts`. |
+| `intake.json` | The whole experiment: layout description, envelope, keywords, anchor, photo list. Consumed by `scripts/render-scene.ts`. |
 | `photos/` | Interior references, passed to Marble byte-for-byte. |
 
 The pipeline never opens `blueprint.png`. `lib/marble/intake.ts` takes the
 layout as a sentence of English and carries the image path for provenance only.
 
-## The capture on disk predates this folder
+## The capture on disk predates this folder — and now predates the prompt too
 
 `public/generated/maple-street/` was rendered before the scene folders existed.
-It used this exact layout sentence, these exact keywords and these exact three
-photos — `intake.json` here reproduces its prompt character for character — but
-it was composed against `samples/blueprint.png`, an earlier and cruder drawing
-of the same flat, which `blueprint.png` here replaces. Since the blueprint is
-never read by the pipeline, the two runs differ only in a provenance string.
+It used these exact keywords and these exact three photos, but it was composed
+against `samples/blueprint.png`, an earlier and cruder drawing of the same flat,
+which `blueprint.png` here replaces — and, more importantly, against a
+one-sentence layout description that `intake.json` no longer carries.
 
-It has deliberately **not** been re-rendered. The capture measures well (see
-`samples/QUALITY.md`) and a re-run would spend a live generation to replace a
-good asset with a differently-good one — Marble is not seeded here, so the same
-prompt does not return the same world.
+That sentence has been replaced by an exhaustive one, on the contract
+`birch-row`, `foundry-loft` and `kiln-terrace` are already rendered against:
+every room named, sized, placed in compass terms, connected through a stated
+kind of opening and furnished, plus an `envelope` field so the drawing and the
+prompt cannot disagree about 12.00 × 8.00 m and a 2.60 m ceiling. The reason is
+a failure worth remembering: an undescribed room is an unbuilt room — an earlier
+scene's shower room went unmentioned in its prompt and Marble simply did not
+build it, leaving a dead entrance you could not walk into.
+
+So `intake.json` here no longer reproduces the capture's prompt. The capture
+still measures well (see `samples/QUALITY.md`), but it is the last sample on the
+old contract; re-render it with the command below to bring it into line, and
+expect a different world, because Marble is not seeded here.
 
 ## Photo credits
 

@@ -18,7 +18,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3, Waypoint } from '@/lib/types';
 import { useRoomStore } from '@/lib/scene/roomStore';
 import { isDrag } from '@/components/scene/pointer';
-import { theme } from '@/components/theme';
+import { alpha, theme } from '@/components/theme';
 import type { WaypointAim } from './MiniMap';
 
 export type PlanOverlayProps = {
@@ -51,10 +51,12 @@ export type PlanOverlayProps = {
    visible - and THREE.Color cannot read a custom property, so the value has to
    be threaded in from components/theme.ts rather than referenced.
 
-   Note what is NOT used below: theme's `alpha()`. It returns an rgba() string,
-   which THREE.Color silently mangles (see the header of components/theme.ts),
-   so every transparency here is the material's own `opacity` against an opaque
-   token - not the map's trick of baking alpha into the colour string. */
+   Note where theme's `alpha()` may and may not be used. It returns an rgba()
+   string, which THREE.Color silently mangles (see the header of
+   components/theme.ts), so every transparency on a material below is the
+   material's own `opacity` against an opaque token. The one exception is the
+   order badge, which is painted with canvas 2D before it ever becomes a
+   texture - `fillStyle` takes rgba() correctly, exactly as the map's does. */
 
 /** Shared default: a fresh literal would rebuild the preview memo every render. */
 const NO_POINTS: readonly Vec3[] = [];
@@ -91,9 +93,6 @@ const SECTOR_REACH_OF_ROOM = 46 / 284;
 const SECTOR_REACH_MIN = 0.9;
 const SECTOR_REACH_MAX = 3.5;
 
-/** Unselected reach, relative to the selected one. The mini-map's 26 : 46. */
-const SECTOR_REACH_IDLE = 26 / 46;
-
 /**
  * Clear of the floor, and deliberately below the marker disc's 0.02 and the
  * route's 0.03.
@@ -110,16 +109,23 @@ const SECTOR_LIFT = 0.012;
 const SECTOR_SEGMENT = Math.PI / 24;
 const SECTOR_SEGMENTS_MAX = 96;
 
-/* Strength of the fill and its outline. Same pairing the map uses, nudged up
-   for the idle case: on the map a wedge is seen face-on against a flat plan,
-   where here it is foreshortened against a photoreal floor that already has
-   texture of its own, and 0.14 amber at a grazing angle is not a mark. */
-const SECTOR_FILL_SELECTED = 0.32;
-const SECTOR_FILL_IDLE = 0.18;
-const SECTOR_EDGE_SELECTED = 0.9;
-const SECTOR_EDGE_IDLE = 0.5;
+/* Strength of the fill and its outline. The map's selected pairing: on the map
+   a wedge is seen face-on against a flat plan, where here it is foreshortened
+   against a photoreal floor that already has texture of its own, so anything
+   fainter is not a mark at a grazing angle. */
+const SECTOR_FILL = 0.32;
+const SECTOR_EDGE = 0.9;
 
-/** Below this a sweep is a facing, not an arc. The mini-map's own threshold. */
+/**
+ * Below this a sweep is not an arc, and nothing is drawn at all.
+ *
+ * The mini-map's own threshold, but the conclusion here is different, and
+ * deliberately so. The map falls back to a facing tick because a wedge is the
+ * only thing it can say about direction; the render has the marker's own stem
+ * standing in the room and the dashed shot preview running out of it, both of
+ * which answer "which way" better than a 90 cm scratch on the floor. Drawing
+ * that scratch anyway is what made a static shot look like a broken pan.
+ */
 const SWEEP_EPSILON = 1e-3;
 
 export function PlanOverlay({
@@ -146,28 +152,29 @@ export function PlanOverlay({
     [shotPreview],
   );
 
-  /* Indexed rather than scanned per waypoint. The map can afford a `.find`
-     inside its loop because it redraws on a timer anyway; this list is walked
-     during React's render on every slider tick in the waypoint panel. */
-  const aimById = useMemo(() => new Map(aims.map((a) => [a.id, a])), [aims]);
+  /* Two scans of a list that is a handful of entries long, replacing the index
+     the whole list used to need. Nothing is drawn for a waypoint that is not
+     selected or whose shot does not swing, so there is nothing left to look
+     up per waypoint. */
+  const sectorAim = selectedId ? aims.find((a) => a.id === selectedId) : undefined;
+  const sectorAt =
+    sectorAim && Math.abs(sectorAim.sweep) > SWEEP_EPSILON
+      ? waypoints.find((w) => w.id === selectedId)
+      : undefined;
 
   return (
     <group name="plan-overlay">
-      {/* Sectors first, so they sort under the route and the markers when two
-          of them land at the same depth. Their y does the real work (see
+      {/* The sector first, so it sorts under the route and the markers when
+          they land at the same depth. Its y does the real work (see
           SECTOR_LIFT); this is only what settles a tie. */}
-      {waypoints.map((w) => {
-        const aim = aimById.get(w.id);
-        return aim ? (
-          <AimSector
-            key={w.id}
-            waypoint={w}
-            aim={aim}
-            reach={reach}
-            selected={w.id === selectedId}
-          />
-        ) : null;
-      })}
+      {sectorAt && sectorAim && (
+        <AimSector
+          position={sectorAt.position}
+          from={sectorAim.from}
+          sweep={sectorAim.sweep}
+          reach={reach}
+        />
+      )}
 
       {routePoints.length > 1 && (
         <Line points={routePoints} color={t.mapRoute} lineWidth={3} dashed={false} />
@@ -208,59 +215,58 @@ export function PlanOverlay({
  * lets someone check the framing against the room rather than against a
  * drawing of the room.
  *
- * WHY UNSELECTED WAYPOINTS GET ONE TOO
- * Because the map gives them one, and the two views are projections of a
- * single list - a mark that appears in one and not the other is the reader's
- * problem to reconcile, not ours to save a few triangles over. It also makes
- * the useful comparison possible at a glance: shots 2 and 3 both facing the
- * same wall is a thing you see instantly with every sector down and never see
- * one selection at a time. They are drawn faint and at just over half the
- * reach, exactly as on the map, so the selected one still wins the eye.
+ * WHY ONLY THE SELECTED WAYPOINT GETS ONE
+ * A sector is a wide flat stain lying on floor the user is also looking at.
+ * One is an annotation; six overlapping at eye height is a haze the room has
+ * to be read through, and the faint-and-shorter treatment that keeps the
+ * unselected ones out of the way on a 300 px plan does not survive
+ * foreshortening - it just adds amber. The map is the view that can afford to
+ * show every shot at once, because it is seen face-on and has no room in it to
+ * obscure; the render is the view that answers "does THIS arc contain the
+ * window", which is a question about one shot at a time.
+ *
+ * Rendered only for a genuinely non-zero sweep, too. See SWEEP_EPSILON.
  */
 function AimSector({
-  waypoint,
-  aim,
+  position,
+  from,
+  sweep,
   reach,
-  selected,
 }: {
-  waypoint: Waypoint;
-  aim: WaypointAim;
+  position: Vec3;
+  from: number;
+  sweep: number;
   reach: number;
-  selected: boolean;
 }) {
   const t = theme();
-  const shape = useAimShape(aim.from, aim.sweep, reach * (selected ? 1 : SECTOR_REACH_IDLE));
+  const shape = useAimShape(from, sweep, reach);
 
   return (
-    <group
-      position={[waypoint.position[0], waypoint.position[1] + SECTOR_LIFT, waypoint.position[2]]}
-    >
-      {shape.fan && (
-        <mesh geometry={shape.fan}>
-          <meshBasicMaterial
-            color={t.mapAim}
-            transparent
-            opacity={selected ? SECTOR_FILL_SELECTED : SECTOR_FILL_IDLE}
-            /* Never occlude: the sector is an annotation, and a marker or a
-               route leg disappearing behind one would be a lie about the
-               plan. */
-            depthWrite={false}
-            /* The fan's winding flips with the sign of `sweep`, and a sector
-               is a two-sided annotation anyway - it has to survive the camera
-               dropping below the floor line of a capture with a step in it. */
-            side={THREE.DoubleSide}
-            /* Belt and braces against the floor. SECTOR_LIFT is what clears
-               the splat, which is a cloud rather than a surface and does not
-               respond to a depth bias in any predictable way; the offset is
-               for the collider's floor triangles, which ARE a plane and which
-               12 mm can still lose to at a grazing angle on a far wall, where
-               the depth buffer has almost no precision left to spend. */
-            polygonOffset
-            polygonOffsetFactor={-1}
-            polygonOffsetUnits={-1}
-          />
-        </mesh>
-      )}
+    <group position={[position[0], position[1] + SECTOR_LIFT, position[2]]}>
+      <mesh geometry={shape.fan}>
+        <meshBasicMaterial
+          color={t.mapAim}
+          transparent
+          opacity={SECTOR_FILL}
+          /* Never occlude: the sector is an annotation, and a marker or a
+             route leg disappearing behind one would be a lie about the
+             plan. */
+          depthWrite={false}
+          /* The fan's winding flips with the sign of `sweep`, and a sector
+             is a two-sided annotation anyway - it has to survive the camera
+             dropping below the floor line of a capture with a step in it. */
+          side={THREE.DoubleSide}
+          /* Belt and braces against the floor. SECTOR_LIFT is what clears
+             the splat, which is a cloud rather than a surface and does not
+             respond to a depth bias in any predictable way; the offset is
+             for the collider's floor triangles, which ARE a plane and which
+             12 mm can still lose to at a grazing angle on a far wall, where
+             the depth buffer has almost no precision left to spend. */
+          polygonOffset
+          polygonOffsetFactor={-1}
+          polygonOffsetUnits={-1}
+        />
+      </mesh>
       <Line
         points={shape.edge}
         color={t.mapAim}
@@ -268,9 +274,9 @@ function AimSector({
            filled sector collapses to a few pixels of wash, and the two radii
            running out from the marker are the only part of the shape still
            saying which way it opens. */
-        lineWidth={selected ? 2 : 1.5}
+        lineWidth={2}
         transparent
-        opacity={selected ? SECTOR_EDGE_SELECTED : SECTOR_EDGE_IDLE}
+        opacity={SECTOR_EDGE}
         depthWrite={false}
         dashed={false}
       />
@@ -288,14 +294,14 @@ function AimSector({
  */
 function useAimShape(from: number, sweep: number, radius: number): AimShape {
   const shape = useMemo(() => buildAimShape(from, sweep, radius), [from, sweep, radius]);
-  useEffect(() => () => shape.fan?.dispose(), [shape]);
+  useEffect(() => () => shape.fan.dispose(), [shape]);
   return shape;
 }
 
 type AimShape = {
-  /** The filled wedge - null for a shot that only faces a direction. */
-  fan: THREE.BufferGeometry | null;
-  /** What to stroke: the wedge's outline, or the bare facing tick. */
+  /** The filled wedge. */
+  fan: THREE.BufferGeometry;
+  /** The wedge's outline, stroked as a fat line. */
   edge: THREE.Vector3[];
 };
 
@@ -318,12 +324,6 @@ type AimShape = {
  * the parametrisation here. Two views, one convention.
  */
 function buildAimShape(from: number, sweep: number, radius: number): AimShape {
-  const tip = new THREE.Vector3(Math.cos(from) * radius, 0, Math.sin(from) * radius);
-  // No swing: one tick showing which way it faces, as the map does.
-  if (Math.abs(sweep) <= SWEEP_EPSILON) {
-    return { fan: null, edge: [new THREE.Vector3(), tip] };
-  }
-
   const segments = Math.min(
     SECTOR_SEGMENTS_MAX,
     Math.max(3, Math.ceil(Math.abs(sweep) / SECTOR_SEGMENT)),
@@ -379,6 +379,19 @@ function useSectorReach(): number {
 }
 
 /**
+ * Badge size in metres, as the sprite is drawn at the camera's own height.
+ *
+ * The unselected one is roughly a head's width at 3 m, which is the distance
+ * this screen is usually flown at - big enough to read a two-digit number,
+ * small enough that six of them do not tile the room. The selected one is a
+ * third larger, which together with the inverted fill (see makeOrderTexture)
+ * is what separates it at a glance; the two marker tokens are currently the
+ * same blue, so colour alone cannot carry that.
+ */
+const BADGE = 0.3;
+const BADGE_SELECTED = 0.4;
+
+/**
  * One waypoint marker. A component rather than inline JSX in the map, because
  * the order badge builds its texture through a hook - calling that inside a
  * loop would change the hook count whenever a waypoint is added or removed.
@@ -418,13 +431,21 @@ function WaypointMarker({
         <cylinderGeometry args={[0.012, 0.012, cameraHeight, 8]} />
         <meshBasicMaterial color={colour} transparent opacity={0.55} />
       </mesh>
-      {/* head at camera height */}
-      <mesh position={[0, cameraHeight, 0]} onClick={pick}>
-        <sphereGeometry args={[selected ? 0.1 : 0.075, 16, 12]} />
-        <meshBasicMaterial color={colour} />
-      </mesh>
+      {/* The head, at camera height. The number IS the head: a sphere with a
+          badge floating above it was two marks for one fact, and the sphere
+          was the one that could not tell you which stop it was. Sprite rather
+          than a billboarded plane so it faces the camera without a frame of
+          rig code, and it takes the click itself - the thing you aim at is the
+          thing you can hit. */}
       {badge && (
-        <sprite position={[0, cameraHeight + 0.24, 0]} scale={[0.32, 0.32, 1]}>
+        <sprite
+          position={[0, cameraHeight, 0]}
+          scale={selected ? [BADGE_SELECTED, BADGE_SELECTED, 1] : [BADGE, BADGE, 1]}
+          onClick={pick}
+        >
+          {/* depthTest off: the splat is a cloud, and a number half-buried in
+              it is unreadable in exactly the crowded shots where the running
+              order matters most. */}
           <spriteMaterial map={badge} transparent depthTest={false} />
         </sprite>
       )}
@@ -452,26 +473,46 @@ function makeOrderTexture(n: number, selected: boolean): THREE.CanvasTexture | n
   if (typeof document === 'undefined') return null;
   const t = theme();
 
-  const size = 64;
+  /* 96 rather than 64 since the badge became the marker itself and is drawn
+     half again as large; at 64 the glyph edges crawled when the camera moved. */
+  const size = 96;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
+  const mid = size / 2;
+  const keyline = size * 0.03;
+  const ring = size * 0.055;
+
+  /* Three concentric passes, because this now has to read over a photoreal
+     capture rather than over the app's own dark chrome, and a splat is bright
+     in one corner of the room and near-black in the next. The dark keyline
+     saves the light disc against a sunlit wall; the light disc saves the dark
+     keyline against a shadowed one. Whichever way the background goes, one of
+     the two boundaries is still a boundary. */
   ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+  ctx.arc(mid, mid, mid - keyline / 2, 0, Math.PI * 2);
   ctx.fillStyle = selected ? t.markerSelected : t.markerFill;
   ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = t.marker;
+  ctx.lineWidth = keyline;
+  ctx.strokeStyle = alpha(t.mapKeyline, 0.6);
+  ctx.stroke();
+
+  /* Inverted against the fill, so the selected badge is a blue disc with a
+     pale ring and the rest are pale discs with a blue one. */
+  ctx.beginPath();
+  ctx.arc(mid, mid, mid - keyline - ring / 2, 0, Math.PI * 2);
+  ctx.lineWidth = ring;
+  ctx.strokeStyle = selected ? t.markerFill : t.marker;
   ctx.stroke();
 
   ctx.fillStyle = selected ? t.markerInkInverse : t.markerInk;
-  ctx.font = "bold 32px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
+  ctx.font = `bold ${Math.round(size * 0.46)}px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(String(n), size / 2, size / 2 + 1);
+  ctx.fillText(String(n), mid, mid + size * 0.02);
 
   const texture = new THREE.CanvasTexture(canvas);
 

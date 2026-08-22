@@ -51,6 +51,7 @@ export {
   COHERENCE_CLAUSE,
   DEFAULT_ANCHOR,
   INSPIRATION_CLAUSE,
+  RECONSTRUCTION_CLAUSE,
   composeIntake,
 } from './intake';
 export type {

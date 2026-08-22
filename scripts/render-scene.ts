@@ -19,17 +19,43 @@ import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { relative, resolve } from 'node:path';
 
-import { buildWorldPrompt, type MarbleModel } from '@/lib/marble/api';
+import { buildWorldPrompt, MAX_IMAGES_RECONSTRUCT, type MarbleModel } from '@/lib/marble/api';
 import { buildEnvironment } from '@/lib/marble/build';
 import { isMarbleError, MarbleError } from '@/lib/marble/errors';
 import { composeIntake } from '@/lib/marble/intake';
+
+import { extractVideoFrames } from './lib/video-frames';
 
 type SceneSpec = {
   id: string;
   name?: string;
   description?: string;
-  blueprint: { path: string; layoutDescription?: string };
-  photos: string[];
+  /**
+   * Optional only for a video scene, where the frames carry the geometry and
+   * there is no plan to point at. See the `video` field.
+   */
+  blueprint?: { path: string; layoutDescription?: string };
+  /**
+   * A walkthrough to render from, instead of (not alongside) `photos`.
+   *
+   * Marble cannot take a video — a video media asset validates as an
+   * `image_prompt` and then 500s the generation — but frames of one real space
+   * are exactly the input `multi-image` + `reconstruct_images` exists for. So a
+   * video scene extracts stills and sends those, as views rather than as
+   * inspiration. See scripts/lib/video-frames.ts.
+   */
+  video?: {
+    path: string;
+    /** Evenly spaced stills to pull. Defaults to Marble's cap of 8. */
+    frames?: number;
+    /**
+     * Stands in for `blueprint.layoutDescription`. For a video scene this
+     * should describe what the footage SHOWS, not a floor plan: the frames are
+     * the geometry, and prose that invents rooms only contradicts them.
+     */
+    layoutDescription?: string;
+  };
+  photos?: string[];
   keywords: string | string[];
   /** Metres, straight from the plan generator so drawing and prompt agree. */
   envelope?: { widthM: number; depthM: number; ceilingM: number };
@@ -60,6 +86,9 @@ const { values, positionals } = parseArgs({
        asks Marble to build a room where four different flats are all true at
        once. 'views' is only correct for photos of one real space. */
     photos: { type: 'string' },
+    /* Overrides video.frames, for trying a coarser or finer sampling of the
+       same walkthrough without editing the scene. */
+    frames: { type: 'string' },
     /* Off by default so Marble rewrites our prompt as it normally would; on
        when the prompt has been written deliberately enough to be worth
        protecting, which is now the case for every scene folder. */
@@ -71,7 +100,8 @@ const sceneId = positionals[0];
 if (!sceneId) {
   process.stderr.write(
     'usage: render-scene.ts <scene-id> [--dry-run] [--out dir] [--world id]\n' +
-      '                       [--resume op] [--photos inspiration|views] [--recaption]\n',
+      '                       [--resume op] [--photos inspiration|views] [--recaption]\n' +
+      '                       [--frames n]   (video scenes only)\n',
   );
   process.exit(2);
 }
@@ -84,11 +114,64 @@ const log = (line: string) => process.stdout.write(`${line}\n`);
 try {
   /* ------------------------------- stage 1 -------------------------------- */
 
-  const photoRole = values.photos === 'views' ? 'views' : 'inspiration';
+  let photoRole: 'inspiration' | 'views' = values.photos === 'views' ? 'views' : 'inspiration';
+  let photos = spec.photos ?? [];
+  let blueprint = spec.blueprint;
+  /* Left undefined for photo scenes so buildWorldPrompt keeps deciding by count
+     exactly as it did before; set only by the video path. */
+  let reconstructImages: boolean | undefined;
+  let videoProvenance: Record<string, unknown> = {};
+
+  if (spec.video) {
+    const videoPath = resolve(sceneDir, spec.video.path);
+    const requested = Number(values.frames ?? spec.video.frames ?? MAX_IMAGES_RECONSTRUCT);
+    if (!Number.isInteger(requested) || requested < 1 || requested > MAX_IMAGES_RECONSTRUCT) {
+      throw new MarbleError({
+        kind: 'input',
+        message: `Frame count must be 1..${MAX_IMAGES_RECONSTRUCT}, got ${values.frames ?? spec.video.frames}.`,
+        hint: `Marble accepts at most ${MAX_IMAGES_RECONSTRUCT} images with reconstruct_images on, so that is the ceiling on frames.`,
+      });
+    }
+
+    /* Derived, not authored: re-extracted on every run so the frames on disk
+       can never disagree with the video and the count in the spec. */
+    photos = await extractVideoFrames({
+      videoPath,
+      outDir: resolve(sceneDir, 'frames'),
+      count: requested,
+      log,
+    });
+
+    /* Not a choice the caller gets to make. Frames of one walk ARE views of one
+       space, which is the only case 'views' is correct for, and the only case
+       reconstruction has anything to reconstruct from. */
+    photoRole = 'views';
+    reconstructImages = true;
+
+    /* composeIntake existence-checks the blueprint and then never opens it, so
+       for a scene whose geometry comes from footage the video is the honest
+       thing to record there. */
+    blueprint ??= {
+      path: videoPath,
+      ...(spec.video.layoutDescription
+        ? { layoutDescription: spec.video.layoutDescription }
+        : {}),
+    };
+    videoProvenance = { video: rel(videoPath), videoFrames: photos.length };
+  }
+
+  if (!blueprint) {
+    throw new MarbleError({
+      kind: 'input',
+      message: `Scene ${spec.id} has neither a "blueprint" nor a "video".`,
+      hint: 'A scene needs a plan to describe or footage to reconstruct from.',
+    });
+  }
+
   const intake = await composeIntake(
     {
-      blueprint: spec.blueprint,
-      photos: spec.photos,
+      blueprint,
+      photos,
       keywords: spec.keywords,
       ...(spec.envelope ? { envelope: spec.envelope } : {}),
     },
@@ -123,6 +206,7 @@ try {
             composedPrompt: intake.composedPrompt,
             references,
             disableRecaption: !values.recaption,
+            ...(reconstructImages === undefined ? {} : { reconstructImages }),
           }),
           model: spec.generation?.model ?? 'marble-1.1',
           display_name: spec.generation?.displayName ?? spec.name ?? spec.id,
@@ -154,6 +238,7 @@ try {
       ...(values.resume ? { resumeOperationId: values.resume } : {}),
       deepVerify: !values['skip-deep-verify'],
       disableRecaption: !values.recaption,
+      ...(reconstructImages === undefined ? {} : { reconstructImages }),
       // name/description are read back by lib/renders.ts to label the capture
       // in the render list; the rest is what the scene was made from.
       provenance: {
@@ -170,6 +255,7 @@ try {
           ? { photosWithheld: intake.omittedPhotos.map(rel) }
           : {}),
         photoRole,
+        ...videoProvenance,
         ...(spec.envelope ? { envelope: spec.envelope } : {}),
         ...spec.provenance,
       },

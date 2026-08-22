@@ -18,7 +18,15 @@
  * waypoints you had just placed. The list on the home page owns that choice.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import Link from 'next/link';
 import {
@@ -382,22 +390,7 @@ export default function PlanPage() {
 
       {/* ---------------- sidebar ---------------- */}
       <aside className="plan__side">
-        <div className="plan__group">
-          <div className="plan__label">Style</div>
-          <div className="plan__styles">
-            {PATH_STYLES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={settings.style === s ? 'primary' : undefined}
-                onClick={() => setStyle(s)}
-                title={STYLE_BLURB[s]}
-              >
-                {STYLE_LABEL[s]}
-              </button>
-            ))}
-          </div>
-        </div>
+        <StyleMenu value={settings.style} onSelect={setStyle} />
 
         <div className="plan__group">
           <div className="plan__actions">
@@ -474,6 +467,220 @@ export default function PlanPage() {
           </p>
         )}
       </aside>
+    </div>
+  );
+}
+
+/* Roughly the height of the open menu. Only ever used to choose a direction,
+   so an estimate is enough - being a few pixels out flips the menu upward one
+   scroll position early, which nobody can see. */
+const MENU_HEIGHT = 210;
+/* Matches --s1, the gap the rest of the screen uses between a control and the
+   thing that belongs to it. Lives here because the offset is applied to a
+   measured rect in JS, not in the sheet. */
+const MENU_GAP = 4;
+
+/**
+ * The four path styles behind one button.
+ *
+ * They were a permanent 2x2 grid, which spent a quarter of the sidebar
+ * restating three choices nobody had made, and hid the one-line description of
+ * each in a `title` attribute - a tooltip that never appears on touch, never
+ * appears for a keyboard user, and appears a second too late for everyone
+ * else. Those blurbs are the only thing on the screen that says how the styles
+ * differ, so in the menu they are ordinary text next to the name.
+ *
+ * WHY THE MENU IS position: fixed
+ * The sidebar scrolls (`overflow-y: auto`), and an absolutely-positioned menu
+ * inside a scrolling box is clipped at its edge - which is exactly where a
+ * four-row menu hanging off a control near the top of the panel would land.
+ * Fixed takes it out of that box entirely; nothing above it here establishes a
+ * containing block, and it also puts the menu over the 3D canvas without
+ * depending on where the sidebar sits in the stacking order. The cost is
+ * having to measure the trigger, which is what `place` does, and to keep
+ * measuring while anything scrolls or resizes underneath it.
+ */
+function StyleMenu({
+  value,
+  onSelect,
+}: {
+  value: PathStyle;
+  onSelect: (style: PathStyle) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [box, setBox] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  /* Which row takes focus once the menu exists. Set before the open, read
+     after it, so it cannot be state - it would render one frame too late. */
+  const pending = useRef(0);
+
+  const labelId = useId();
+  const buttonId = useId();
+  const current = Math.max(0, PATH_STYLES.indexOf(value));
+
+  const place = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const below = window.innerHeight - rect.bottom;
+    // Open upward when the window's bottom edge would cut the menu off and
+    // there is more room the other way.
+    const flip = below < MENU_HEIGHT && rect.top > below;
+    setBox({
+      left: rect.left,
+      width: rect.width,
+      top: flip ? undefined : rect.bottom + MENU_GAP,
+      bottom: flip ? window.innerHeight - rect.top + MENU_GAP : undefined,
+    });
+  }, []);
+
+  const openAt = useCallback(
+    (index: number) => {
+      pending.current = index;
+      place();
+      setOpen(true);
+    },
+    [place],
+  );
+
+  const close = useCallback((refocus: boolean) => {
+    setOpen(false);
+    if (refocus) triggerRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    itemRefs.current[pending.current]?.focus();
+
+    const onPointerDown = (e: PointerEvent) => {
+      // The menu is a child of the wrapper in the DOM even though it paints
+      // somewhere else, so one containment test covers trigger and menu both.
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    // Capture, because the sidebar scrolls rather than the window: a scroll
+    // event on an inner box does not bubble to window on the bubble phase.
+    const onReflow = () => place();
+
+    document.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('scroll', onReflow, true);
+    window.addEventListener('resize', onReflow);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('scroll', onReflow, true);
+      window.removeEventListener('resize', onReflow);
+    };
+  }, [open, place]);
+
+  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const n = PATH_STYLES.length;
+    const at = itemRefs.current.findIndex((el) => el === document.activeElement);
+    const move = (to: number) => {
+      e.preventDefault();
+      itemRefs.current[(to + n) % n]?.focus();
+    };
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close(true);
+    } else if (e.key === 'Tab') {
+      /* Deliberately not prevented. Every row is tabIndex -1, so once focus is
+         back on the trigger the browser's own Tab lands on whatever follows
+         the control - the menu never traps and never swallows the keystroke. */
+      close(true);
+    } else if (e.key === 'ArrowDown') {
+      move(at + 1);
+    } else if (e.key === 'ArrowUp') {
+      move(at - 1);
+    } else if (e.key === 'Home') {
+      move(0);
+    } else if (e.key === 'End') {
+      move(n - 1);
+    }
+    // Enter and Space are left to the row's own button, which fires a click.
+  };
+
+  return (
+    <div className="plan__group" ref={wrapRef}>
+      <div className="plan__label" id={labelId}>
+        Style
+      </div>
+      <button
+        ref={triggerRef}
+        id={buttonId}
+        type="button"
+        className="plan__style-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        /* Both, so the name is "Style, Cinematic, slowest biggest moves":
+           the group label alone drops the current value, the content alone
+           drops what the value is a value of. */
+        aria-labelledby={`${labelId} ${buttonId}`}
+        onClick={() => (open ? close(false) : openAt(current))}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            openAt(current);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            openAt(PATH_STYLES.length - 1);
+          }
+        }}
+      >
+        <span>{STYLE_LABEL[value]}</span>
+        <span className="plan__style-hint">{STYLE_BLURB[value]}</span>
+        <svg className="plan__style-caret" viewBox="0 0 12 12" aria-hidden="true">
+          <path
+            d="M3 4.5 6 8l3-3.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
+      {open && box && (
+        <div
+          className="plan__style-menu"
+          role="menu"
+          aria-labelledby={labelId}
+          style={{ left: box.left, width: box.width, top: box.top, bottom: box.bottom }}
+          onKeyDown={onMenuKey}
+        >
+          {PATH_STYLES.map((s, i) => (
+            <button
+              key={s}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
+              type="button"
+              role="menuitemradio"
+              aria-checked={s === value}
+              tabIndex={-1}
+              className="plan__style-item"
+              onClick={() => {
+                onSelect(s);
+                close(true);
+              }}
+            >
+              <span>{STYLE_LABEL[s]}</span>
+              <span className="plan__style-blurb">{STYLE_BLURB[s]}</span>
+              {/* Always rendered, only ever faded: showing it on the checked
+                  row alone would move the labels of the other three. */}
+              <span className="plan__style-tick" aria-hidden="true">
+                ✓
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

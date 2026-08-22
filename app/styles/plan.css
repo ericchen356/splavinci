@@ -7,11 +7,17 @@
  * here - do not introduce a raw hex, a bare pixel padding or a hand-picked
  * font size below this line.
  *
- * The two overlays in here - the map stack and the running order - sit
- * directly on the render with no card behind them. That is deliberate: the
- * render is the subject of this screen, and every panel laid over it is a
- * panel you are not looking through. The cost is that their text has to hold
- * up over an unknown photograph, which is what the halo on .plan__over does.
+ * The map stack sits directly on the render with no card behind it: the render
+ * is the subject of this screen, and every panel laid over it is a panel you
+ * are not looking through. Its text holds up over an unknown photograph via
+ * the halo on .plan__over.
+ *
+ * The running order used to work the same way and no longer does. A halo keeps
+ * a word readable, but it cannot make a line of text look like a row you can
+ * click, and over a bright render the halo and the ink were the same
+ * brightness. Those rows now carry their own near-white ground, which is the
+ * one thing that makes their contrast a known quantity instead of a property
+ * of whatever photograph is behind them.
  * ================================================================ */
 
 /* Two values the flat-surface palette cannot supply, because everything in it
@@ -21,6 +27,10 @@
 .plan {
   --plan-veil: rgba(255, 255, 255, 0.86);
   --plan-halo: rgba(255, 255, 255, 0.92);
+  /* A third, for hover and selection on a row that already sits on --plan-veil.
+     The step has to be in opacity rather than in tint: a tinted wash takes its
+     hue from whatever is behind it, and what is behind it is a photograph. */
+  --plan-veil-firm: rgba(255, 255, 255, 0.97);
 
   display: flex;
   height: 100%;
@@ -87,7 +97,12 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 1px;
+  /* Rows, not a block ruled into parts: the gap is what stops four fills from
+     reading as one panel. */
+  gap: var(--s1);
+  /* Room for the selected row's shadow and its inset ring, which a flush
+     scroll box would shave off. */
+  padding: var(--s1);
   /* Scrolls, but must not put a scrollbar gutter over the render when there
      is nothing to scroll. */
   scrollbar-width: thin;
@@ -102,18 +117,26 @@
   padding: 0 var(--s3) var(--s2);
 }
 
-/* No card, no rule, no fill until you interact with it. The list has to be
-   readable without becoming a second panel competing with the sidebar. */
+/* Every entry is its own row on its own ground. Near-white rather than white,
+   so the render still shows through and the list stays part of the picture
+   instead of becoming a second sidebar - but opaque enough that the ink on it
+   is measurable: --ink on this fill is 18.9:1 over a white render and still
+   13.7:1 over a black one, where the bare haloed text used to fail. */
 .plan__order-item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--s2);
+  min-height: var(--h-control-sm);
   padding: var(--s1) var(--s3);
   border: 1px solid transparent;
-  border-radius: var(--r-pill);
-  background: none;
-  box-shadow: none;
+  border-radius: var(--r-sm);
+  background: var(--plan-veil);
+  color: var(--ink);
+  /* The halo is for text with nothing behind it. This row has a ground of its
+     own, and the two together only blur the glyphs. */
+  text-shadow: none;
+  box-shadow: var(--shadow-1);
   font-size: var(--fs-2);
   line-height: 1.4;
   text-align: right;
@@ -125,17 +148,21 @@
     box-shadow var(--t-mid) var(--ease-out);
 }
 
-.plan__order-item:hover {
-  background: var(--plan-veil);
+/* :not(:disabled) only to outweigh the global button hover, which is written
+   with the same trick and would otherwise replace this row's ground with a
+   transparent dark wash - putting the text back on the photograph. */
+.plan__order-item:hover:not(:disabled),
+.plan__order-item:active:not(:disabled) {
+  background: var(--plan-veil-firm);
 }
 
-/* Selected is an ink edge, not a fill wash. Over a photograph a tinted fill
-   changes colour with whatever is behind it; a border does not. */
 .plan__order-item[aria-current='true'] {
-  background: var(--plan-veil);
+  background: var(--plan-veil-firm);
   border-color: var(--accent);
-  box-shadow: var(--shadow-1);
-  font-weight: 600;
+  /* A second ink edge drawn inward: "selected" reads as a 2px rule without the
+     half-pixel nudge a wider border would push through the rest of the list. */
+  box-shadow: inset 0 0 0 1px var(--accent), var(--shadow-2);
+  font-weight: 650;
 }
 
 .plan__order-item:focus-visible {
@@ -185,10 +212,109 @@
   color: var(--muted);
 }
 
-.plan__styles {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+/* ---------------- the style menu ---------------- */
+
+.plan__style-trigger {
+  width: 100%;
+  justify-content: flex-start;
   gap: var(--s2);
+}
+
+/* The blurb travels with the value rather than living only in the menu: the
+   collapsed control should say as much about the current choice as the open
+   one does. It is the part that gives way when the sidebar is narrow. */
+.plan__style-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.plan__style-caret {
+  flex: none;
+  width: var(--s3);
+  height: var(--s3);
+  color: var(--muted);
+}
+
+/* Not transitioned. The caret is reporting a state, and a control that keeps
+   moving after the menu is already open reads as still deciding. */
+.plan__style-trigger[aria-expanded='true'] .plan__style-caret {
+  transform: rotate(180deg);
+}
+
+.plan__style-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+
+/* Positioned from a rect measured in JS - see StyleMenu for why it is fixed
+   rather than absolute. The z-index is what keeps it over the 3D canvas. */
+.plan__style-menu {
+  position: fixed;
+  z-index: var(--z-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s1);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+}
+
+.plan__style-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border-color: transparent;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+
+/* The row under the pointer and the row under the keyboard have to look the
+   same, or arrowing through the menu with the mouse still on it shows two
+   candidates at once. */
+.plan__style-item:focus {
+  background-color: var(--hover);
+}
+
+/* Inset, because an offset ring on the top row would sit on the menu's own
+   border rather than on a surface behind it. */
+.plan__style-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.plan__style-item[aria-checked='true'] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+  font-weight: 650;
+}
+
+.plan__style-blurb {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+
+.plan__style-tick {
+  flex: none;
+  color: var(--accent);
+  opacity: 0;
+}
+
+.plan__style-item[aria-checked='true'] .plan__style-tick {
+  opacity: 1;
 }
 
 .plan__actions {
@@ -322,6 +448,8 @@
    so there is nothing here that has to keep moving to stay correct. */
 @media (prefers-reduced-motion: reduce) {
   .plan__order-item,
+  .plan__style-trigger,
+  .plan__style-item,
   .plan__review {
     transition-duration: 1ms;
   }
