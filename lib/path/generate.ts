@@ -28,6 +28,7 @@ import * as THREE from 'three';
 import type { FrameEntry, PathSettings, ShotType, Vec3, Waypoint } from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
 import {
+  cellIndex,
   floorYAtCell,
   worldToCell,
   isPassable,
@@ -291,6 +292,12 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   // mini-map click means), so the camera anchor is lifted to eye height.
   // Without this the camera would sink to the floor at every waypoint and pop
   // back up for each travel leg.
+  const clearanceAt = (position: Vec3): number => {
+    const { col, row } = worldToCell(grid, position[0], position[2]);
+    const value = grid.clearance[cellIndex(grid, col, row)];
+    return Number.isFinite(value) ? value : DEFAULT_GENERATE.radius * 4;
+  };
+
   const anchorOf = (wp: Waypoint) =>
     new THREE.Vector3(
       wp.position[0],
@@ -318,6 +325,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       // frame; the shot falls back to its direction of travel.
       hasTarget: intent.targetDistance > 1e-6,
       aim: intent.aim,
+      clearance: clearanceAt(wp.position),
     };
     const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius);
     fittedShots.set(index, fitted);
@@ -427,6 +435,9 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       const fromLook = exitPose.lookAt.clone();
       const toLook = entryPose.lookAt.clone();
       const blendSpan = blendFractionFor(leg.duration);
+      // A short leg cannot give 45% twice over without the two turns swamping
+      // it, so the look blend is capped a little under half.
+      const lookSpan = Math.min(0.48, Math.max(blendSpan, LOOK_BLEND_FRACTION));
       const legSpeed = legSpeedFor(i);
       const travelEase = hermiteRate(
         rateAgainst(legSpeed, shotSpeedFor(i)),
@@ -494,9 +505,9 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
           // so a blend between them cannot collapse, and the aim point is
           // re-projected to a fixed distance afterwards.
           const aim = safeDirection(aheadPoint, p, endTangent);
-          const bFrom = blendOut(e, blendSpan);
+          const bFrom = blendOut(e, lookSpan);
           if (bFrom > 0) aim.lerp(safeDirection(fromLook, p, aim), bFrom);
-          const bTo = blendOut(1 - e, blendSpan);
+          const bTo = blendOut(1 - e, lookSpan);
           if (bTo > 0) aim.lerp(safeDirection(toLook, p, aim), bTo);
           if (aim.lengthSq() < 1e-8) aim.copy(endTangent);
           aim.normalize();
@@ -795,12 +806,23 @@ function fitShotToRoom(
   if (!clips(ctx, shotType)) {
     return { shotType, ctx, degraded: false, fellBackToHold: false };
   }
-  for (const scale of [0.6, 0.35, 0.15]) {
-    const softer: ShotContext = { ...ctx, intensity: ctx.intensity * scale };
+  // Shrink the move, do not swap the shot. Replacing a clipping orbit with a
+  // hold made choosing orbit, dolly-through, push-in or pull-back appear to do
+  // nothing whatsoever - the panel reported the choice and the camera ignored
+  // it. A small orbit is still an orbit; a hold is a different shot.
+  for (const scale of [0.75, 0.55, 0.4, 0.28, 0.2, 0.14, 0.1, 0.06, 0.03]) {
+    // Both, because a shot may be clipping on its reach, its arc, or both.
+    const softer: ShotContext = {
+      ...ctx,
+      intensity: ctx.intensity * scale,
+      fitScale: scale,
+    };
     if (!clips(softer, shotType)) {
       return { shotType, ctx: softer, degraded: true, fellBackToHold: false };
     }
   }
+  // Even a motionless camera clips, so the anchor itself is unusable. That is
+  // a different failure and does warrant a hold.
   return {
     shotType: 'hold',
     ctx: { ...ctx, intensity: 0 },
@@ -841,6 +863,22 @@ const AMPLITUDE_REACH_FLOOR = 1.8;
  * itself actually travelling.
  */
 const BLEND_SECONDS = 0.45;
+
+/**
+ * Share of a leg over which the VIEW turns between framings.
+ *
+ * Much longer than the position correction, because they are different jobs.
+ * The position offset reconciles a discontinuity and wants to be over quickly;
+ * the view is performing a turn, and doing it in the same 0.45 s meant the
+ * camera whipped round to face the direction of travel and then sat locked
+ * there for the rest of the leg. Turning across most of the leg reads as the
+ * camera looking where it is going rather than snapping to attention.
+ *
+ * Both ends use this, so a leg is turning off its previous framing for the
+ * first stretch and onto the next one for the last, with only a short spell of
+ * pure travel-facing in between.
+ */
+const LOOK_BLEND_FRACTION = 0.45;
 
 /** How far ahead a travelling camera looks, in metres. */
 const LOOK_AHEAD_DISTANCE = 3;

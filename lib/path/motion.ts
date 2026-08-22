@@ -29,6 +29,27 @@ export type ShotContext = {
   hasTarget: boolean;
   /** Explicit arc for a pan, in absolute bearings. Null derives one. */
   aim?: ShotAim | null;
+  /**
+   * Room to move at the anchor, in metres to the nearest obstacle.
+   *
+   * Shot amplitudes used to be fixed constants - a 110 degree orbit at up to
+   * 3.2 m radius - which in an ordinary room clips a wall immediately. The
+   * validator then reduced the amplitude three times and, failing, replaced
+   * the shot with a hold, so choosing orbit or push-in appeared to do nothing
+   * at all. A shot should fit the space it is in rather than be swapped for a
+   * different shot.
+   */
+  clearance?: number;
+  /**
+   * Safety scale on ANGULAR amplitude, owned by the wall validator.
+   *
+   * Separate from `intensity` because the two answer to different people.
+   * Intensity is the user's move size and deliberately no longer touches
+   * angle; the validator still needs some way to shrink an arc that clips, and
+   * without one it could only reduce a quantity orbit does not use, fail, and
+   * substitute a hold. Defaults to 1 and is never surfaced as a control.
+   */
+  fitScale?: number;
 };
 
 export type CameraSample = { position: THREE.Vector3; lookAt: THREE.Vector3 };
@@ -81,6 +102,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
   // Not clamped to 1: emphasis above 100% is a real request for a bigger
   // move, and generate.ts pulls back anything that would clip a wall.
   const k = Math.max(0, ctx.intensity);
+  const fit = ctx.fitScale === undefined ? 1 : Math.max(0, ctx.fitScale);
   const t = Math.max(0, Math.min(1, u));
   const anchor = ctx.anchor;
 
@@ -119,18 +141,22 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
         ? toTarget.clone().normalize()
         : ctx.tangent.clone().setY(0).normalize();
       if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
+      const roomFor = ctx.clearance !== undefined
+        ? Math.max(AMPLITUDE.minTargetRadius * 0.5, ctx.clearance * 0.85)
+        : AMPLITUDE.maxOrbitRadius;
       const orbitRadius = Math.min(
-        Math.max(hasTarget ? toTarget.length() : 0, AMPLITUDE.minTargetRadius),
+        Math.max(hasTarget ? toTarget.length() : 0, AMPLITUDE.minTargetRadius * 0.5),
         AMPLITUDE.maxOrbitRadius,
-      );
+        roomFor,
+      ) * (fit < 1 ? fit : 1);
       const centre = anchor.clone().addScaledVector(dir, orbitRadius);
       // Sweep centred on the waypoint's own bearing, so the shot starts where
       // the camera already is rather than teleporting to the arc's start -
       // unless an explicit arc says otherwise, which is then taken verbatim.
       const start = Math.atan2(anchor.z - centre.z, anchor.x - centre.x);
       const angle = ctx.aim && Math.abs(ctx.aim.sweep) > 1e-4
-        ? start + ctx.aim.sweep * (t - 0.5)
-        : start + (t - 0.5) * AMPLITUDE.orbitSweep;
+        ? start + ctx.aim.sweep * fit * (t - 0.5)
+        : start + (t - 0.5) * AMPLITUDE.orbitSweep * fit;
       return {
         position: new THREE.Vector3(
           centre.x + Math.cos(angle) * orbitRadius,
@@ -142,8 +168,11 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
     }
 
     case 'push-in': {
-      if (!hasTarget) return dolly(anchor, ctx.tangent, k, t);
-      const travel = radius * AMPLITUDE.pushInFraction * k;
+      if (!hasTarget) return dolly(anchor, ctx.tangent, k, t, null, ctx);
+      const travel = Math.min(
+        radius * AMPLITUDE.pushInFraction * k,
+        ctx.clearance !== undefined ? ctx.clearance * 0.8 : Infinity,
+      );
       const dir = toTarget.clone().normalize();
       return {
         position: anchor.clone().addScaledVector(dir, travel * t),
@@ -152,8 +181,11 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
     }
 
     case 'pull-back': {
-      if (!hasTarget) return dolly(anchor, ctx.tangent.clone().negate(), k, t);
-      const travel = radius * AMPLITUDE.pullBackFraction * k;
+      if (!hasTarget) return dolly(anchor, ctx.tangent.clone().negate(), k, t, null, ctx);
+      const travel = Math.min(
+        radius * AMPLITUDE.pullBackFraction * k,
+        ctx.clearance !== undefined ? ctx.clearance * 0.8 : Infinity,
+      );
       const dir = toTarget.clone().normalize();
       // Starts close and retreats to the waypoint, revealing context.
       return {
@@ -189,7 +221,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
       const base = hasTarget ? toTarget.clone() : ctx.tangent.clone().multiplyScalar(distance);
       if (base.lengthSq() < 1e-6) base.set(0, 0, distance);
-      const angle = (t - 0.5) * AMPLITUDE.panSweep;
+      const angle = (t - 0.5) * AMPLITUDE.panSweep * fit;
       const swept = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
       return {
         position: eye,
@@ -208,7 +240,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
     case 'dolly-through':
     default:
-      return dolly(anchor, ctx.tangent, k, t, hasTarget ? target : null);
+      return dolly(anchor, ctx.tangent, k, t, hasTarget ? target : null, ctx);
   }
 }
 
@@ -219,10 +251,13 @@ function dolly(
   k: number,
   t: number,
   target: THREE.Vector3 | null = null,
+  ctx?: { clearance?: number },
 ): CameraSample {
   const dir = tangent.lengthSq() > 1e-6 ? tangent.clone().normalize() : new THREE.Vector3(0, 0, 1);
-  const half = (AMPLITUDE.dollyLength * k) / 2;
-  const position = anchor.clone().addScaledVector(dir, -half + AMPLITUDE.dollyLength * k * t);
+  const room = ctx?.clearance !== undefined ? ctx.clearance * 1.6 : Infinity;
+  const length = Math.min(AMPLITUDE.dollyLength * k, room);
+  const half = length / 2;
+  const position = anchor.clone().addScaledVector(dir, -half + length * t);
   return { position, lookAt: target ? target.clone() : aheadOf(position, dir) };
 }
 
