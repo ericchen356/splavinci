@@ -51,6 +51,7 @@ const STYLE_BLURB: Record<PathStyle, string> = {
 };
 
 export default function PlanPage() {
+  const [showSplat, setShowSplat] = useState(true);
   const assets = useRoomAssets();
   const {
     waypoints, selectedId, settings, path, generating, generateError, dirty,
@@ -174,7 +175,7 @@ export default function PlanPage() {
           <CameraRig moveSpeed={flySpeed} />
           <CameraPresetDriver preset={preset} nonce={presetNonce} />
           <CameraTracker onChange={setPose} />
-          <RoomScene onFloorClick={dropAt3D}>
+          <RoomScene onFloorClick={dropAt3D} showSplat={showSplat}>
             <PlanOverlay
               waypoints={waypoints}
               selectedId={selectedId}
@@ -226,6 +227,20 @@ export default function PlanPage() {
         <div style={{ marginBottom: 16 }}>
           <div style={sectionLabel}>Capture</div>
           <CapturePicker />
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={sectionLabel}>Layers</div>
+          <LayerToggle label="Splat cloud" checked={showSplat} onChange={setShowSplat} />
+          <LayerToggle
+            label="Collider wireframe"
+            checked={assets.showCollider}
+            onChange={assets.setShowCollider}
+          />
+          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4, lineHeight: 1.4 }}>
+            The wireframe is the geometry the router treats as walls — worth a look when a
+            path takes a turn you did not expect.
+          </div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -360,6 +375,28 @@ export default function PlanPage() {
         </div>
       </aside>
     </div>
+  );
+}
+
+function LayerToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        fontSize: 12, padding: '3px 0', cursor: 'pointer',
+      }}
+    >
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      {label}
+    </label>
   );
 }
 

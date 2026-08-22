@@ -1,8 +1,7 @@
 import Link from 'next/link';
 
 const STEPS = [
-  { href: '/scene', title: 'Scene', body: 'Load the splat, collider, and object meshes. Free-look around the room.' },
-  { href: '/plan', title: 'Plan', body: 'Drop waypoints in 3D or on the mini-map, tune each shot, generate a wall-aware path.' },
+  { href: '/plan', title: 'Plan', body: 'Fly the capture, drop waypoints in 3D or on the mini-map, tune each shot, and generate a wall-aware path.' },
   { href: '/review', title: 'Review', body: 'Play the flythrough, follow it on the mini-map, leave spatial comments, export the video.' },
 ];
 
