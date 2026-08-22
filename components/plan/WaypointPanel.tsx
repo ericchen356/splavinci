@@ -3,20 +3,30 @@
 /**
  * The per-waypoint technique panel.
  *
- * The controlSpectrum slider is the spine of it. At the Auto end the shot type
- * and duration controls are disabled, because at that end they genuinely have
- * no effect - the generator infers both. Showing them live but inert would
- * imply the user's pick matters when it does not, so they grey out and the
- * panel says what auto chose and why instead.
+ * Auto and Manual are a toggle, not two ends of a slider. Under a blend the
+ * duration you typed was not the duration you got, and shot type snapped at
+ * the midpoint of a control that looked continuous. Here the panel shows
+ * exactly one resolved shot and it is exactly what the camera will do.
  *
- * Everything is recomputed live through resolveShot as the slider moves, so the
- * blend is visible before committing to a regenerate.
+ * Manual parameters are not rendered at all in auto mode rather than shown
+ * disabled: a greyed-out control still implies the value matters, and in auto
+ * mode it does not. Switching to Manual seeds them from whatever auto just
+ * resolved, so control is taken over the shot on screen rather than a default.
+ *
+ * Move size applies in both modes, because scaling a shot is a matter of
+ * degree even when you are happy to let the system pick the shot.
  *
  * Screen-agnostic on purpose: the review screen reopens this same panel from
  * its technique label.
  */
 
-import { SHOT_TYPES, type PathStyle, type ShotType, type Waypoint } from '@/lib/types';
+import {
+  EMPHASIS_RANGE,
+  SHOT_TYPES,
+  type PathStyle,
+  type ShotType,
+  type Waypoint,
+} from '@/lib/types';
 import { resolveShot, type WalkGrid } from '@/lib/path';
 
 export type WaypointPanelProps = {
@@ -45,9 +55,7 @@ export function WaypointPanel({
   onChange, onRemove, onReorder, onClose, footer,
 }: WaypointPanelProps) {
   const intent = resolveShot(waypoint, grid, style);
-  const spectrum = waypoint.controlSpectrum;
-  // Past the Auto end: the manual controls start doing something.
-  const manualActive = spectrum > 0;
+  const manual = waypoint.mode === 'manual';
 
   return (
     <div
@@ -73,20 +81,32 @@ export function WaypointPanel({
         {onClose && <button onClick={onClose} style={{ padding: '2px 8px' }}>✕</button>}
       </div>
 
-      {/* ---- the spectrum ---- */}
+      {/* ---- who decides ---- */}
       <div style={row}>
-        <div style={labelStyle}>
-          <span>Control</span>
-          <span style={{ color: 'var(--text)' }}>
-            {spectrum <= 0 ? 'Auto' : spectrum >= 1 ? 'Manual' : `${Math.round(spectrum * 100)}% manual`}
-          </span>
-        </div>
-        <input
-          type="range" min={0} max={1} step={0.01} value={spectrum}
-          onChange={(e) => onChange({ controlSpectrum: Number(e.target.value) })}
-        />
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)' }}>
-          <span>Auto</span><span>Manual</span>
+        <div style={labelStyle}><span>Shot</span></div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button
+            className={!manual ? 'primary' : undefined}
+            onClick={() => onChange({ mode: 'auto' })}
+            style={{ flex: 1, padding: '6px 8px', fontSize: 12 }}
+          >
+            Auto
+          </button>
+          <button
+            className={manual ? 'primary' : undefined}
+            // Seed the manual values from what auto just chose, so switching
+            // starts from the shot on screen instead of a stale default.
+            onClick={() =>
+              onChange({
+                mode: 'manual',
+                shotType: intent.shotType,
+                duration: Number(intent.duration.toFixed(1)),
+              })
+            }
+            style={{ flex: 1, padding: '6px 8px', fontSize: 12 }}
+          >
+            Manual
+          </button>
         </div>
       </div>
 
@@ -102,47 +122,70 @@ export function WaypointPanel({
         }}
       >
         <div style={{ marginBottom: 4 }}>
-          <span style={{ color: 'var(--muted)' }}>Resolves to </span>
           <strong style={{ color: 'var(--accent)' }}>{intent.shotType}</strong>
           <span style={{ color: 'var(--muted)' }}> for </span>
           <strong>{intent.duration.toFixed(1)}s</strong>
-          <span style={{ color: 'var(--muted)' }}> at {Math.round(intent.intensity * 100)}% intensity</span>
         </div>
         <div style={{ color: 'var(--muted)', lineHeight: 1.4 }}>{intent.reason}</div>
       </div>
 
-      {/* ---- manual controls ---- */}
-      <div style={{ ...row, opacity: manualActive ? 1 : 0.45 }}>
-        <div style={labelStyle}>
-          <span>Shot type</span>
-          {!manualActive && <span style={{ fontSize: 10 }}>move off Auto to use</span>}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
-          {SHOT_TYPES.map((s: ShotType) => (
-            <button
-              key={s}
-              disabled={!manualActive}
-              onClick={() => onChange({ shotType: s })}
-              className={waypoint.shotType === s ? 'primary' : undefined}
-              style={{ padding: '5px 4px', fontSize: 11 }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* ---- manual parameters, shown only when they apply ---- */}
+      {manual && (
+        <>
+          <div style={row}>
+            <div style={labelStyle}>
+              <span>Type</span>
+              <span style={{ fontSize: 10 }}>auto would pick {intent.autoShotType}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+              {SHOT_TYPES.map((shot: ShotType) => (
+                <button
+                  key={shot}
+                  onClick={() => onChange({ shotType: shot })}
+                  className={waypoint.shotType === shot ? 'primary' : undefined}
+                  style={{ padding: '5px 4px', fontSize: 11 }}
+                >
+                  {shot}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div style={{ ...row, opacity: manualActive ? 1 : 0.45 }}>
+          <div style={row}>
+            <div style={labelStyle}>
+              <span>Duration</span>
+              <span style={{ color: 'var(--text)' }}>{waypoint.duration.toFixed(1)}s</span>
+            </div>
+            <input
+              type="range" min={0.5} max={15} step={0.1}
+              value={waypoint.duration}
+              onChange={(e) => onChange({ duration: Number(e.target.value) })}
+            />
+          </div>
+        </>
+      )}
+
+      {/* ---- emphasis: meaningful in both modes ---- */}
+      <div style={row}>
         <div style={labelStyle}>
-          <span>Duration</span>
-          <span style={{ color: 'var(--text)' }}>{waypoint.duration.toFixed(1)}s</span>
+          <span>Move size</span>
+          <span style={{ color: 'var(--text)' }}>
+            {Math.round(waypoint.emphasis * 100)}%
+            {Math.abs(waypoint.emphasis - 1) < 0.01 ? ' (style default)' : ''}
+          </span>
         </div>
         <input
-          type="range" min={0.5} max={15} step={0.1}
-          value={waypoint.duration}
-          disabled={!manualActive}
-          onChange={(e) => onChange({ duration: Number(e.target.value) })}
+          type="range"
+          min={EMPHASIS_RANGE.min}
+          max={EMPHASIS_RANGE.max}
+          step={EMPHASIS_RANGE.step}
+          value={waypoint.emphasis}
+          onChange={(e) => onChange({ emphasis: Number(e.target.value) })}
         />
+        <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+          How far the camera travels during the shot — the sweep of an orbit, the
+          reach of a push-in. Scales whatever the shot is, auto or manual.
+        </div>
       </div>
 
       <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>

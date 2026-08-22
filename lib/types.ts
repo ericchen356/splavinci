@@ -30,6 +30,9 @@ export const SHOT_TYPES: readonly ShotType[] = [
   'hold',
 ] as const;
 
+/** Who decides a waypoint's shot. */
+export type WaypointMode = 'auto' | 'manual';
+
 /** A stop the camera visits, in list order.
  *
  *  `position` is the raw 3D point the user clicked on the splat - there are no
@@ -38,16 +41,35 @@ export const SHOT_TYPES: readonly ShotType[] = [
 export type Waypoint = {
   id: string;
   position: Vec3;
+  /**
+   * Who decides this waypoint's shot.
+   *
+   * Deliberately a mode, not a 0..1 auto-to-manual blend. A blend conflated
+   * three unrelated decisions - which shot, how long, how big - into one
+   * control: the duration you typed was not the duration you got, shot type
+   * snapped discontinuously at the midpoint of a slider that looked
+   * continuous, and "60% manual" described no intention anyone actually has.
+   * Emphasis below stays continuous, because scaling a move genuinely is a
+   * matter of degree.
+   */
+  mode: WaypointMode;
+  /** Authoritative only when mode is 'manual'. */
   shotType: ShotType;
-  /** 0 = fully auto (infer everything), 1 = fully manual (obey the user).
-   *  Values in between blend the two rather than snapping to either end. */
-  controlSpectrum: number;
-  /** Seconds the user asked for. Only authoritative as controlSpectrum -> 1. */
+  /** Seconds. Authoritative only when mode is 'manual'. */
   duration: number;
+  /**
+   * Multiplier on the style's move amplitude; 1 means "as the style intends".
+   * Applies in both modes, so an inferred shot can be played down without
+   * taking manual control of it, and a manual shot can be gentle.
+   */
+  emphasis: number;
   /** True once the user has dragged or edited this waypoint; marks it and its
    *  immediate neighbours for targeted recompute instead of a full rebuild. */
   pinned: boolean;
 };
+
+/** Sensible emphasis range for the UI. 1 is the style's own amplitude. */
+export const EMPHASIS_RANGE = { min: 0.2, max: 2, step: 0.05 } as const;
 
 /** One sampled camera frame. The path generator emits a full table of these;
  *  the review screen reads it for mini-map sync and the technique label. */

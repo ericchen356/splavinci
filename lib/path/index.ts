@@ -29,7 +29,7 @@ export {
 
 export {
   resolveShot, inferShotType, inferDuration, readWall, roomShape,
-  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER, SHOT_TYPE_CROSSOVER,
+  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER,
   type ShotIntent, type RoomShape, type StylePreset, type WallReading,
 } from './shots';
 

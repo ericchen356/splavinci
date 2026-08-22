@@ -33,7 +33,7 @@
  */
 
 import type * as THREE from 'three';
-import type { PathStyle, ShotType, Vec3, Waypoint } from '@/lib/types';
+import { EMPHASIS_RANGE, type PathStyle, type ShotType, type Vec3, type Waypoint } from '@/lib/types';
 import {
   cellIndex,
   cellToWorld,
@@ -76,9 +76,6 @@ export const STYLE_PRESETS: Record<PathStyle, StylePreset> = {
  */
 export const WALL_OPENNESS_CROSSOVER = 0.5;
 
-/** Where shotType flips from the inferred choice to the user's. */
-export const SHOT_TYPE_CROSSOVER = 0.5;
-
 export type ShotIntent = {
   waypointId: string;
   /** The shot that will actually be rendered. */
@@ -95,12 +92,12 @@ export type ShotIntent = {
   /** Metres from the waypoint to the nearest wall, per the walk grid. */
   wallDistance: number;
   /** Which end of the spectrum won the shotType. */
-  source: 'auto' | 'manual' | 'blended';
-  blend: number;
+  source: 'auto' | 'manual';
+  /** Applied move amplitude multiplier. */
+  emphasis: number;
+  /** What auto would have chosen, so the panel can show it in manual mode. */
   autoShotType: ShotType;
   autoDuration: number;
-  manualShotType: ShotType;
-  manualDuration: number;
   /** Short human-readable justification, shown in the waypoint panel. */
   reason: string;
 };
@@ -370,31 +367,28 @@ export function resolveShot(
   style: PathStyle,
 ): ShotIntent {
   const preset = STYLE_PRESETS[style];
-  const blend = clamp(waypoint.controlSpectrum, 0, 1);
+  const manual = waypoint.mode === 'manual';
 
   const reading = grid ? readWall(grid, waypoint.position) : null;
   const inferred = inferShotType(reading);
   const autoShotType = inferred.shotType;
   const autoDuration = inferDuration(autoShotType, reading, preset);
 
-  const manualShotType = waypoint.shotType;
-  const manualDuration = waypoint.duration;
+  // No blending. The mode picks a source outright, so what the panel shows is
+  // exactly what the camera does.
+  const shotType = manual ? waypoint.shotType : autoShotType;
+  const duration = clamp(manual ? waypoint.duration : autoDuration, 0.4, 30);
+  // Emphasis scales the style's amplitude in both modes, which is what makes a
+  // gentle manual orbit expressible.
+  const emphasis = clamp(waypoint.emphasis, EMPHASIS_RANGE.min, EMPHASIS_RANGE.max);
+  const intensity = clamp(preset.intensity * emphasis, 0, 1);
 
-  // Categorical: has to pick a side. Continuous: actually blends.
-  const shotType = blend >= SHOT_TYPE_CROSSOVER ? manualShotType : autoShotType;
-  const duration = clamp(lerp(autoDuration, manualDuration, blend), 0.4, 30);
-  const intensity = clamp(lerp(preset.intensity, 1, blend), 0, 1);
-
-  const source: ShotIntent['source'] =
-    blend <= 0.001 ? 'auto' : blend >= 0.999 ? 'manual' : 'blended';
-
-  const reason =
-    source === 'manual'
-      ? `you chose ${manualShotType} for ${manualDuration.toFixed(1)}s`
-      : source === 'auto'
-        ? inferred.reason
-        : `${Math.round(blend * 100)}% manual - ${shotType} at ${duration.toFixed(1)}s ` +
-          `(auto suggested ${autoShotType} at ${autoDuration.toFixed(1)}s)`;
+  const source: ShotIntent['source'] = manual ? 'manual' : 'auto';
+  const emphasisNote =
+    Math.abs(emphasis - 1) < 0.01 ? '' : ` at ${Math.round(emphasis * 100)}% emphasis`;
+  const reason = manual
+    ? `you chose ${shotType} for ${duration.toFixed(1)}s${emphasisNote}`
+    : `${inferred.reason}${emphasisNote}`;
 
   const targetPoint = targetFor(shotType, reading, waypoint);
   // Horizontal only: the target is lifted to eye height, and a shot that frames
@@ -413,11 +407,9 @@ export function resolveShot(
     targetDistance,
     wallDistance: reading?.clearance ?? 0,
     source,
-    blend,
+    emphasis,
     autoShotType,
     autoDuration,
-    manualShotType,
-    manualDuration,
     reason,
   };
 }

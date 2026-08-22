@@ -39,9 +39,11 @@ export function makeWaypoint(position: Vec3): Waypoint {
   return {
     id: nextWaypointId(),
     position,
+    // New waypoints start automatic: the user opts in to control.
+    mode: 'auto',
     shotType: 'orbit',
-    controlSpectrum: 0,
     duration: 4,
+    emphasis: 1,
     pinned: false,
   };
 }

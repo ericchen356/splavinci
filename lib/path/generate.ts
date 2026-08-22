@@ -97,9 +97,10 @@ function waypointKey(w: Waypoint): string {
   return [
     w.id,
     w.position.map((v) => round(v)).join(','),
+    w.mode,
     w.shotType,
-    round(w.controlSpectrum),
     round(w.duration, 2),
+    round(w.emphasis, 3),
   ].join('|');
 }
 
