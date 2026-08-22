@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3, Waypoint } from '@/lib/types';
+import { isDrag } from '@/components/scene/pointer';
 
 export type PlanOverlayProps = {
   waypoints: readonly Waypoint[];
@@ -81,6 +82,8 @@ function WaypointMarker({
   const badge = useOrderTexture(order, selected);
   const pick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
+    // Releasing a look-around drag over a marker is not a request to select it.
+    if (isDrag(e)) return;
     onSelect?.(waypoint.id);
   };
 

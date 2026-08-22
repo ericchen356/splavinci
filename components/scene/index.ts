@@ -12,9 +12,16 @@ export {
   CameraRig,
   CameraPresetDriver,
   CAMERA_PRESETS,
+  derivePresets,
   type CameraMode,
   type CameraPreset,
   type CameraRigProps,
 } from './CameraRig';
+export {
+  CameraTracker,
+  type CameraPose,
+  type CameraTrackerProps,
+} from './CameraTracker';
+export { CLICK_SLOP_PX, isDrag } from './pointer';
 export { AssetStatusPanel, type AssetStatusPanelProps } from './AssetStatusPanel';
 export { CapturePicker } from './CapturePicker';

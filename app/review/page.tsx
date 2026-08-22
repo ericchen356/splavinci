@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Canvas } from '@react-three/fiber';
-import { RoomScene } from '@/components/scene';
+import { CameraPresetDriver, RoomScene, derivePresets } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
@@ -49,6 +49,18 @@ export default function ReviewPage() {
     [assets.colliderData],
   );
   const objects = useMemo(() => toShotObjects(assets.loadedObjects), [assets.loadedObjects]);
+
+  // Only ever seen before a path exists - PlaybackCamera owns the camera after
+  // that - but "before" is most of the time on a first visit, so it is framed
+  // from the collider rather than from numbers that fit the sample flat.
+  const startView = useMemo(
+    () => derivePresets(assets.roomBounds, assets.floor.baseY)[0],
+    [assets.roomBounds, assets.floor],
+  );
+  const [startNonce, setStartNonce] = useState(0);
+  useEffect(() => {
+    if (assets.roomBounds) setStartNonce((n) => n + 1);
+  }, [assets.roomBounds, assets.assetSetId]);
 
   const frames = path?.frames ?? [];
   const duration = path?.duration ?? 0;
@@ -146,10 +158,11 @@ export default function ReviewPage() {
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
         <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <Canvas
-            camera={{ position: [5, 1.6, 4], fov: 60, near: 0.05, far: 500 }}
+            camera={{ position: startView.position, fov: 60, near: 0.05, far: 2000 }}
             gl={{ preserveDrawingBuffer: true }}
           >
             <PlaybackCamera frames={frames} duration={duration} />
+            {!hasPath && <CameraPresetDriver preset={startView} nonce={startNonce} />}
             <RoomScene />
           </Canvas>
 

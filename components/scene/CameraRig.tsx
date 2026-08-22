@@ -103,6 +103,10 @@ function FlyControls({ enabled, moveSpeed, lookSpeed }: FlyProps) {
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.button !== 2) return;
+      // Re-read the orientation here, not just on mount: anything else that
+      // moved the camera meanwhile (a preset jump) would otherwise be undone
+      // by the first pixel of this drag.
+      euler.current.setFromQuaternion(camera.quaternion, 'YXZ');
       dragging.current = true;
       domElement.setPointerCapture(e.pointerId);
     };
@@ -178,16 +182,67 @@ export type CameraPreset = {
 };
 
 /**
- * Handy viewpoints for the fixture room (x 0..10, y 0..2.7, z 0..8). The
- * overhead one clears the 2.7 m walls, which is what makes the collider
- * wireframe readable.
+ * Viewpoints derived from the scene's own bounds.
+ *
+ * Hardcoded presets only ever fit the room they were written for: values tuned
+ * to a 10 x 8 m apartment drop the camera into the dirt of a 30 x 37 m outdoor
+ * capture. Everything here is expressed relative to the collider's extents and
+ * floor height, so a capture we have never seen still gets usable framing.
  */
-export const CAMERA_PRESETS: readonly CameraPreset[] = [
+export function derivePresets(
+  bounds: THREE.Box3 | null,
+  floorY = 0,
+): readonly CameraPreset[] {
+  if (!bounds || bounds.isEmpty()) return FALLBACK_PRESETS;
+
+  const cx = (bounds.min.x + bounds.max.x) / 2;
+  const cz = (bounds.min.z + bounds.max.z) / 2;
+  const spanX = bounds.max.x - bounds.min.x;
+  const spanZ = bounds.max.z - bounds.min.z;
+  const span = Math.max(spanX, spanZ);
+  const eye = floorY + 1.6;
+  const centre: Vec3 = [cx, floorY + Math.min(1.2, span * 0.08), cz];
+
+  return [
+    {
+      id: 'interior',
+      label: 'Interior',
+      // Standing inside, a quarter of the way in, looking at the middle.
+      position: [cx - spanX * 0.25, eye, cz - spanZ * 0.25],
+      target: centre,
+    },
+    {
+      id: 'overhead',
+      label: 'Overhead',
+      // High enough to clear the tallest geometry, so the collider reads.
+      position: [cx, Math.max(bounds.max.y + span * 0.35, floorY + span * 0.9), cz + 0.01],
+      target: [cx, floorY, cz],
+    },
+    {
+      id: 'corner',
+      label: 'Corner',
+      position: [bounds.min.x - span * 0.28, floorY + span * 0.45, bounds.min.z - span * 0.28],
+      target: [cx, floorY + span * 0.06, cz],
+    },
+    {
+      id: 'far',
+      label: 'Wide',
+      position: [cx + span * 0.75, floorY + span * 0.32, cz + span * 0.75],
+      target: centre,
+    },
+  ];
+}
+
+/** Used before any collider has loaded. */
+const FALLBACK_PRESETS: readonly CameraPreset[] = [
   { id: 'interior', label: 'Interior', position: [1.5, 1.65, 1.5], target: [5.5, 1.2, 4.2] },
   { id: 'overhead', label: 'Overhead', position: [5, 17, 4.2], target: [5, 0, 4] },
   { id: 'corner', label: 'Corner', position: [-4.5, 7.5, -3.5], target: [5, 0.8, 4] },
-  { id: 'bedroom', label: 'Bedroom', position: [7.2, 1.6, 5.6], target: [8.6, 0.9, 2.4] },
+  { id: 'far', label: 'Wide', position: [14, 8, 14], target: [5, 1, 4] },
 ];
+
+/** @deprecated Prefer derivePresets(bounds) - these only fit the sample room. */
+export const CAMERA_PRESETS = FALLBACK_PRESETS;
 
 /** Minimal shape of whatever `useThree().controls` happens to be. */
 type TargetedControls = { target: THREE.Vector3; update: () => void };
@@ -215,14 +270,23 @@ export function CameraPresetDriver({
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls);
   const invalidate = useThree((s) => s.invalidate);
+  const applied = useRef('');
 
   useEffect(() => {
     if (!preset) return;
-    camera.position.set(...preset.position);
+    // Controls appearing or going away - which is what an orbit/fly toggle
+    // looks like from here - re-runs this effect with the preset unchanged.
+    // Re-seating the camera then would yank the user back out of wherever they
+    // had flown to, so only the orbit pivot is re-applied on those runs.
+    const key = `${preset.id}:${nonce}`;
+    const reframing = applied.current !== key;
+    applied.current = key;
+
+    if (reframing) camera.position.set(...preset.position);
     if (hasTarget(controls)) {
       controls.target.set(...preset.target);
       controls.update();
-    } else {
+    } else if (reframing) {
       camera.lookAt(new THREE.Vector3(...preset.target));
     }
     invalidate();

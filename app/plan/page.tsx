@@ -12,10 +12,20 @@
  * into lib/path, then draws whatever comes back.
  */
 
-import { useCallback, useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import Link from 'next/link';
-import { CameraRig, CapturePicker, RoomScene } from '@/components/scene';
+import {
+  CameraPresetDriver,
+  CameraRig,
+  CameraTracker,
+  CapturePicker,
+  RoomScene,
+  derivePresets,
+  isDrag,
+  type CameraMode,
+  type CameraPose,
+} from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
 import { WaypointPanel } from '@/components/plan/WaypointPanel';
@@ -39,6 +49,11 @@ export default function PlanPage() {
     clearWaypoints, select, setStyle, generate,
   } = usePlanStore();
 
+  const [mode, setMode] = useState<CameraMode>('orbit');
+  const [presetId, setPresetId] = useState('interior');
+  const [presetNonce, setPresetNonce] = useState(0);
+  const [pose, setPose] = useState<CameraPose | null>(null);
+
   const grid = useMemo(
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
     [assets.colliderData],
@@ -47,9 +62,38 @@ export default function PlanPage() {
   const selected = waypoints.find((w) => w.id === selectedId) ?? null;
   const selectedIndex = waypoints.findIndex((w) => w.id === selectedId);
 
+  // Framed from the collider's own extents: values tuned to the sample flat
+  // bury the camera in the terrain of a 30 x 37 m outdoor capture.
+  const presets = useMemo(
+    () => derivePresets(assets.roomBounds, assets.floor.baseY),
+    [assets.roomBounds, assets.floor],
+  );
+  const preset = presets.find((p) => p.id === presetId) ?? presets[0];
+
+  // The <Canvas> camera prop is read once, at mount, while the collider is
+  // still loading - so re-frame when it lands or the capture changes.
+  useEffect(() => {
+    if (assets.roomBounds) setPresetNonce((n) => n + 1);
+  }, [assets.roomBounds, assets.assetSetId]);
+
+  // A 3 m/s walk suits a flat; crossing a 37 m capture at it does not.
+  const flySpeed = useMemo(() => {
+    const b = assets.roomBounds;
+    if (!b) return 3.2;
+    return Math.max(3.2, Math.max(b.max.x - b.min.x, b.max.z - b.min.z) * 0.15);
+  }, [assets.roomBounds]);
+
   /* Both entry points funnel into the same action. The only difference is where
      y comes from: a 3D click already has a surface, a mini-map click does not. */
-  const dropAt3D = useCallback((point: Vec3) => { addWaypoint(point); }, [addWaypoint]);
+  const dropAt3D = useCallback(
+    (point: Vec3, event: ThreeEvent<MouseEvent>) => {
+      // Looking around in fly mode - or orbiting - would otherwise drop a
+      // waypoint wherever the drag happened to end.
+      if (isDrag(event)) return;
+      addWaypoint(point);
+    },
+    [addWaypoint],
+  );
 
   const dropAtMap = useCallback(
     (x: number, z: number) => {
@@ -69,8 +113,10 @@ export default function PlanPage() {
     <div style={{ display: 'flex', height: '100%' }}>
       {/* ---------------- 3D viewport ---------------- */}
       <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-        <Canvas camera={{ position: [7.5, 6.5, 12], fov: 55, near: 0.05, far: 500 }}>
-          <CameraRig mode="orbit" target={assets.roomCenter ?? [5, 1.2, 4]} />
+        <Canvas camera={{ position: preset.position, fov: 55, near: 0.05, far: 2000 }}>
+          <CameraRig mode={mode} target={preset.target} moveSpeed={flySpeed} />
+          <CameraPresetDriver preset={preset} nonce={presetNonce} />
+          <CameraTracker onChange={setPose} />
           <RoomScene onFloorClick={dropAt3D} interactiveObjects={false}>
             <PlanOverlay
               waypoints={waypoints}
@@ -88,6 +134,7 @@ export default function PlanPage() {
             waypoints={waypoints}
             selectedId={selectedId}
             polyline={path?.polyline ?? []}
+            camera={pose}
             objects={assets.manifest}
             onPick={dropAtMap}
             onWaypointPick={select}
@@ -119,6 +166,40 @@ export default function PlanPage() {
         <div style={{ marginBottom: 16 }}>
           <div style={sectionLabel}>Capture</div>
           <CapturePicker />
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={sectionLabel}>Camera</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {CAMERA_MODES.map((m) => (
+              <button
+                key={m.value}
+                className={mode === m.value ? 'primary' : undefined}
+                onClick={() => setMode(m.value)}
+                style={{ flex: 1, fontSize: 12, padding: '4px 8px' }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {presets.map((p) => (
+              <button
+                key={p.id}
+                className={p.id === preset.id ? 'primary' : undefined}
+                onClick={() => { setPresetId(p.id); setPresetNonce((n) => n + 1); }}
+                style={{ fontSize: 12, padding: '4px 8px' }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <p style={{ margin: '7px 0 0', fontSize: 11, color: 'var(--muted)', lineHeight: 1.45 }}>
+            {mode === 'orbit'
+              ? 'Drag to orbit · scroll to dolly · right-drag to pan.'
+              : 'Drag to look · WASD to move · Q/E down/up · Shift to sprint.'}
+            {' '}Click the floor without dragging to drop a waypoint.
+          </p>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -217,6 +298,11 @@ export default function PlanPage() {
     </div>
   );
 }
+
+const CAMERA_MODES: readonly { value: CameraMode; label: string }[] = [
+  { value: 'orbit', label: 'Orbit' },
+  { value: 'fly', label: 'Fly' },
+];
 
 const sectionLabel: React.CSSProperties = {
   fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
