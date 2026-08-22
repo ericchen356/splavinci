@@ -388,6 +388,11 @@ function useSectorReach(): number {
  * is what separates it at a glance; the two marker tokens are currently the
  * same blue, so colour alone cannot carry that.
  */
+/* Above anything the scene or Spark sets. The splat renders in the default
+   band, so one high value is enough and a second constant would only invite
+   the two to drift apart. */
+const SPRITE_RENDER_ORDER = 1000;
+
 const BADGE = 0.3;
 const BADGE_SELECTED = 0.4;
 
@@ -442,11 +447,21 @@ function WaypointMarker({
           position={[0, cameraHeight, 0]}
           scale={selected ? [BADGE_SELECTED, BADGE_SELECTED, 1] : [BADGE, BADGE, 1]}
           onClick={pick}
+          /* Drawn last, unconditionally.
+             depthTest off is not enough on its own: the splat cloud is
+             transparent too, and three sorts transparent objects back to front
+             by distance, so from any angle that put the cloud behind the badge
+             in that ordering the cloud simply painted over it afterwards. That
+             is why the numbers came and went as the camera moved rather than
+             failing outright. renderOrder takes them out of the sort entirely. */
+          renderOrder={SPRITE_RENDER_ORDER}
         >
           {/* depthTest off: the splat is a cloud, and a number half-buried in
               it is unreadable in exactly the crowded shots where the running
-              order matters most. */}
-          <spriteMaterial map={badge} transparent depthTest={false} />
+              order matters most. depthWrite off with it, so the badge does not
+              stamp its own quad into the depth buffer and punch a hole in
+              whatever is drawn after it. */}
+          <spriteMaterial map={badge} transparent depthTest={false} depthWrite={false} />
         </sprite>
       )}
     </group>
