@@ -23,4 +23,3 @@ export {
 } from './CameraTracker';
 export { CLICK_SLOP_PX, isDrag } from './pointer';
 export { AssetStatusPanel, type AssetStatusPanelProps } from './AssetStatusPanel';
-export { CapturePicker } from './CapturePicker';

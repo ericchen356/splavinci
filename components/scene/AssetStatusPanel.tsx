@@ -79,9 +79,9 @@ export function AssetStatusPanel({ assets, autoCollapse = true, style }: AssetSt
   return (
     <div
       style={{
-        background: 'color-mix(in srgb, var(--panel) 88%, transparent)',
+        background: 'color-mix(in srgb, var(--surface) 88%, transparent)',
         border: '1px solid var(--line)',
-        borderRadius: 'var(--radius)',
+        borderRadius: 'var(--r-md)',
         padding: collapsed ? '6px 10px' : '10px 12px',
         minWidth: collapsed ? undefined : 260,
         backdropFilter: 'blur(6px)',
@@ -119,7 +119,7 @@ export function AssetStatusPanel({ assets, autoCollapse = true, style }: AssetSt
                 <span style={{ color: PHASE_COLOR[row.phase], width: 12 }}>
                   {PHASE_GLYPH[row.phase]}
                 </span>
-                <span style={{ width: 62, color: 'var(--text)' }}>{row.label}</span>
+                <span style={{ width: 62, color: 'var(--ink)' }}>{row.label}</span>
                 <span
                   style={{
                     color: row.phase === 'failed' ? 'var(--danger)' : 'var(--muted)',

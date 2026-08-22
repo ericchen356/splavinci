@@ -10,9 +10,15 @@
  *
  * Pathfinding is not implemented here. This screen collects intent and calls
  * into lib/path, then draws whatever comes back.
+ *
+ * WHICH CAPTURE IS OPEN IS NOT DECIDED HERE
+ * The capture arrives in the query string and is not switchable on this screen.
+ * Choosing one is a library act - you are picking which room to work on - and
+ * doing it from inside the editor meant a control that silently discarded the
+ * waypoints you had just placed. The list on the home page owns that choice.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import Link from 'next/link';
 import {
@@ -20,7 +26,6 @@ import {
   CameraPresetDriver,
   CameraRig,
   CameraTracker,
-  CapturePicker,
   RoomScene,
   derivePresets,
   isDrag,
@@ -42,8 +47,18 @@ import {
   resolveCameraRadius,
   worldToCell,
 } from '@/lib/path';
+import { ensureRendersLoaded } from '@/lib/assets';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { PATH_STYLES, type PathStyle, type Vec3 } from '@/lib/types';
+
+/* The style ids are camelCase because they are keys; the buttons were
+   rendering them raw, so one of the four read "realEstate". */
+const STYLE_LABEL: Record<PathStyle, string> = {
+  cozy: 'Cozy',
+  realEstate: 'Real estate',
+  cinematic: 'Cinematic',
+  quick: 'Quick',
+};
 
 const STYLE_BLURB: Record<PathStyle, string> = {
   cozy: 'slow, lingering',
@@ -51,6 +66,58 @@ const STYLE_BLURB: Record<PathStyle, string> = {
   cinematic: 'slowest, biggest moves',
   quick: 'fast tour, short shots',
 };
+
+/** How long the route takes to draw itself in, once. */
+const DRAW_MS = 780;
+
+/**
+ * The route, revealed from its start rather than appearing whole.
+ *
+ * A finished path landing in one frame says nothing about which end is the
+ * beginning or which way round the room it runs - the two questions everyone
+ * asks first. Tracing it answers both before anyone has to look for a marker,
+ * and it is the only moment on this screen where the plan is legible as a
+ * sequence rather than as a shape.
+ *
+ * Done by slicing the polyline here rather than animating inside the map and
+ * the 3D overlay, so both views trace in step without either of them knowing
+ * an animation is happening.
+ */
+function useDrawnPath(polyline: Vec3[]): Vec3[] {
+  const [shown, setShown] = useState(polyline.length);
+  const previous = useRef<Vec3[] | null>(null);
+
+  useEffect(() => {
+    // Identity, not length: regenerating after an edit usually lands on a
+    // path the same length as the last one, and comparing lengths would skip
+    // the draw exactly when the user most wants to see what changed.
+    if (previous.current === polyline) return;
+    previous.current = polyline;
+
+    if (polyline.length < 2) {
+      setShown(polyline.length);
+      return;
+    }
+    let raf = 0;
+    let start = 0;
+    const step = (now: number) => {
+      if (start === 0) start = now;
+      const t = Math.min(1, (now - start) / DRAW_MS);
+      // Eased out: the line decelerates into its final point, which reads as
+      // arriving somewhere rather than as running out of road.
+      const eased = 1 - (1 - t) ** 3;
+      setShown(Math.max(2, Math.round(eased * polyline.length)));
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [polyline]);
+
+  return useMemo(
+    () => (shown >= polyline.length ? polyline : polyline.slice(0, shown)),
+    [polyline, shown],
+  );
+}
 
 export default function PlanPage() {
   const [showSplat, setShowSplat] = useState(true);
@@ -61,9 +128,34 @@ export default function PlanPage() {
     clearWaypoints, select, setStyle, generate,
   } = usePlanStore();
 
-  const [presetId, setPresetId] = useState('interior');
   const [presetNonce, setPresetNonce] = useState(0);
   const [pose, setPose] = useState<CameraPose | null>(null);
+
+  /* Read straight off the location rather than through useSearchParams, which
+     would force this statically-rendered route under a Suspense boundary for a
+     value only the browser ever has. */
+  const switchAssetSet = assets.switchAssetSet;
+  const openCaptureId = assets.assetSetId;
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('capture');
+    if (!wanted || wanted === openCaptureId) return;
+    let live = true;
+    /* Await the registry before resolving the id. Arriving here by clicking a
+       row on the library page works without this, because that page has
+       already registered what it listed - but a hard reload or a pasted link
+       lands with only the built-in captures known, and a generated id would
+       silently fall back to the default room with nothing on screen saying
+       why. The call is memoised, so paying for it here costs one request. */
+    void ensureRendersLoaded().then(() => {
+      if (live) switchAssetSet(wanted);
+    });
+    return () => {
+      live = false;
+    };
+    // Only on arrival: re-running this on every id change would fight the
+    // store the moment anything else set a capture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const grid = useMemo(
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
@@ -79,7 +171,10 @@ export default function PlanPage() {
     () => derivePresets(assets.roomBounds, assets.floor.baseY, grid),
     [assets.roomBounds, assets.floor, grid],
   );
-  const preset = presets.find((p) => p.id === presetId) ?? presets[0];
+  /* Eye level, always. The other framings were a row of buttons that moved a
+     camera the user can already fly, and every one of them looked at the room
+     from somewhere the finished video never goes. */
+  const preset = presets.find((p) => p.id === 'interior') ?? presets[0];
 
   // The <Canvas> camera prop is read once, at mount, while the collider is
   // still loading - so re-frame when it lands or the capture changes.
@@ -158,9 +253,6 @@ export default function PlanPage() {
     void generate(assets.colliderData);
   }, [generate, assets.colliderData]);
 
-  /* The selected waypoint's shot, resolved and sampled without generating, so
-     the emphasis slider has something to move. Cheap enough to redo per tick:
-     no A*, no curve, 24 samples. */
   /* Every waypoint's resolved aim, so the map can show where each shot points
      and how far it swings - the thing a bearing in a number field cannot say. */
   const aims = useMemo<WaypointAim[]>(() => {
@@ -177,8 +269,13 @@ export default function PlanPage() {
     [waypoints, selectedIndex, grid, settings.style],
   );
 
-  const errors = path?.warnings.filter((w) => w.severity === 'error') ?? [];
-  const notices = path?.warnings.filter((w) => w.severity !== 'error') ?? [];
+  const polyline = useMemo(() => path?.polyline ?? [], [path]);
+  const drawnPolyline = useDrawnPath(polyline);
+
+  /* info is diagnostic: it explains a decision the generator made on the
+     user's behalf and asks nothing of them. Rendered in the same bordered box
+     as a real failure, it made every successful run look like a near miss. */
+  const notices = path?.warnings.filter((w) => w.severity !== 'info') ?? [];
 
   /* What the generator emitted for the selected waypoint, so the panel reports
      the shot that was validated against the walls rather than the one proposed
@@ -187,9 +284,9 @@ export default function PlanPage() {
   const selectedShot = generatedShotFor(path, selectedId, !dirty);
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
+    <div className="plan">
       {/* ---------------- 3D viewport ---------------- */}
-      <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+      <div className="plan__stage">
         <Canvas camera={{ position: preset.position, fov: 55, near: 0.05, far: 2000 }}>
           <CameraRig moveSpeed={flySpeed} />
           <CameraPresetDriver preset={preset} nonce={presetNonce} />
@@ -198,22 +295,26 @@ export default function PlanPage() {
             <PlanOverlay
               waypoints={waypoints}
               selectedId={selectedId}
-              polyline={path?.polyline ?? []}
+              polyline={drawnPolyline}
               shotPreview={shotPreview}
+              aims={aims}
               onSelect={select}
             />
           </RoomScene>
         </Canvas>
 
-        {/* mini-map, in the corner, over the viewport */}
-        <div style={{ position: 'absolute', left: 12, bottom: 12, width: 300 }}>
+        {/* The map, and directly beneath it the two things you can turn off in
+            the render. They belong here rather than in the sidebar because
+            both are answers to "what am I looking at", which is a question
+            about this corner of the screen. */}
+        <div className="plan__corner">
           <MiniMap
             grid={grid}
             cameraRadius={camera?.radius}
             waypoints={waypoints}
             selectedId={selectedId}
             aims={aims}
-            polyline={path?.polyline ?? []}
+            polyline={drawnPolyline}
             shotPreview={shotPreview}
             camera={pose}
             onPick={dropAtMap}
@@ -221,159 +322,148 @@ export default function PlanPage() {
             onWaypointDrag={dragOnMap}
             height={230}
           />
+          <div className="plan__layers plan__over">
+            <LayerToggle label="Splat cloud" checked={showSplat} onChange={setShowSplat} />
+            <LayerToggle
+              label="Collider wireframe"
+              checked={assets.showCollider}
+              onChange={assets.setShowCollider}
+            />
+          </div>
         </div>
 
+        {/* The running order, against the render rather than in the sidebar:
+            it is a reading of what is in front of you, and in the panel it
+            competed for height with the controls that change it. */}
+        {waypoints.length > 0 && (
+          <div className="plan__order plan__over">
+            <div className="plan__order-head">Waypoints</div>
+            {waypoints.map((w, i) => {
+              const shot = path?.shots.find((s) => s.waypointId === w.id);
+              return (
+                <button
+                  key={w.id}
+                  type="button"
+                  className="plan__order-item"
+                  aria-current={w.id === selectedId}
+                  onClick={() => select(w.id)}
+                >
+                  <span className="plan__order-n">{i + 1}</span>
+                  <span>{shot ? shot.shotType : 'not generated'}</span>
+                  {shot && (
+                    <span className="plan__order-meta">{shot.duration.toFixed(1)}s</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {!assets.settled && (
-          <div style={overlayBadge}>
+          <div className="plan__badge">
             Loading room… {Math.round(assets.progress * 100)}%
           </div>
         )}
         {assets.settled && !assets.colliderData && (
-          <div style={{ ...overlayBadge, color: 'var(--danger)' }}>
+          <div className="plan__badge" data-tone="danger">
             No collider loaded — placement and pathfinding are unavailable.
           </div>
         )}
       </div>
 
       {/* ---------------- sidebar ---------------- */}
-      <aside
-        style={{
-          width: 340, flex: '0 0 340px', borderLeft: '1px solid var(--line)',
-          background: 'var(--bg)', overflowY: 'auto', padding: 14,
-        }}
-      >
-        <div style={{ marginBottom: 16 }}>
-          <div style={sectionLabel}>Capture</div>
-          <CapturePicker />
-        </div>
-
-        <div style={{ marginBottom: 16 }}>
-          <div style={sectionLabel}>Layers</div>
-          <LayerToggle label="Splat cloud" checked={showSplat} onChange={setShowSplat} />
-          <LayerToggle
-            label="Collider wireframe"
-            checked={assets.showCollider}
-            onChange={assets.setShowCollider}
-          />
-        </div>
-
-        <div style={{ marginBottom: 16 }}>
-          <div style={sectionLabel}>Camera</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {presets.map((p) => (
-              <button
-                key={p.id}
-                className={p.id === preset.id ? 'primary' : undefined}
-                onClick={() => { setPresetId(p.id); setPresetNonce((n) => n + 1); }}
-                style={{ fontSize: 12, padding: '4px 8px' }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 16 }}>
-          <div style={sectionLabel}>Style</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+      <aside className="plan__side">
+        <div className="plan__group">
+          <div className="plan__label">Style</div>
+          <div className="plan__styles">
             {PATH_STYLES.map((s) => (
               <button
                 key={s}
+                type="button"
                 className={settings.style === s ? 'primary' : undefined}
                 onClick={() => setStyle(s)}
-                style={{ textAlign: 'left', padding: '7px 9px' }}
                 title={STYLE_BLURB[s]}
               >
-                <div style={{ fontSize: 12 }}>{s}</div>
+                {STYLE_LABEL[s]}
               </button>
             ))}
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-          <button
-            className="primary"
-            style={{ flex: 1 }}
-            disabled={generating || waypoints.length < 1 || !assets.colliderData}
-            onClick={onGenerate}
-          >
-            {generating ? 'Generating…' : 'Generate path'}
-          </button>
-          <button onClick={clearWaypoints} disabled={waypoints.length === 0}>Clear</button>
+        <div className="plan__group">
+          <div className="plan__actions">
+            <button
+              type="button"
+              className="primary"
+              disabled={generating || waypoints.length < 1 || !assets.colliderData}
+              onClick={onGenerate}
+            >
+              {generating ? 'Generating…' : 'Generate path'}
+            </button>
+            <button type="button" onClick={clearWaypoints} disabled={waypoints.length === 0}>
+              Clear
+            </button>
+          </div>
+
+          {path && (
+            <>
+              <div className="plan__stats">
+                <span className="plan__stat-big">{path.duration.toFixed(1)}s</span>
+                <span className="plan__stat-sub">{path.frames.length} frames</span>
+              </div>
+              <div className="plan__stat-diag">
+                {path.stats.recomputedSegments} rebuilt · {path.stats.reusedSegments} reused ·{' '}
+                {path.stats.generateMs} ms
+              </div>
+              {dirty && (
+                <div className="plan__stale">Edited since this path was generated.</div>
+              )}
+              <Link
+                href="/review"
+                className="button primary plan__review"
+                data-stale={dirty}
+              >
+                Open in review →
+              </Link>
+            </>
+          )}
         </div>
 
-        {path && (
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14 }}>
-            {path.frames.length} frames · {path.duration.toFixed(1)}s ·{' '}
-            {path.stats.recomputedSegments} rebuilt / {path.stats.reusedSegments} reused ·{' '}
-            {path.stats.generateMs}ms
-            {dirty && <span style={{ color: 'var(--warn)' }}> · edited since generating</span>}
-            <div style={{ marginTop: 6 }}>
-              <Link href="/review">Open in review →</Link>
-            </div>
+        {(generateError || notices.length > 0) && (
+          <div className="plan__notices">
+            {generateError && (
+              <div className="plan__note" data-severity="error">
+                Generating failed: {generateError}
+              </div>
+            )}
+            {notices.map((w, i) => (
+              <div key={`${w.code}${i}`} className="plan__note" data-severity={w.severity}>
+                {w.message}
+              </div>
+            ))}
           </div>
         )}
 
-        {generateError && (
-          <div style={{ ...noticeBox, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
-            Generating failed: {generateError}
-          </div>
+        {selected ? (
+          <WaypointPanel
+            waypoint={selected}
+            index={selectedIndex}
+            total={waypoints.length}
+            grid={grid}
+            style={settings.style}
+            generated={selectedShot.intent}
+            clipped={selectedShot.clipped}
+            onChange={(patch) => updateWaypoint(selected.id, patch)}
+            onRemove={() => removeWaypoint(selected.id)}
+            onReorder={(d) => reorderWaypoint(selected.id, d)}
+            onClose={() => select(null)}
+          />
+        ) : (
+          <p className="plan__empty">
+            Click the render or the map to drop a waypoint. Select one to set its
+            shot.
+          </p>
         )}
-        {errors.map((w, i) => (
-          <div key={`e${i}`} style={{ ...noticeBox, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
-            {w.message}
-          </div>
-        ))}
-        {notices.map((w, i) => (
-          <div key={`n${i}`} style={{ ...noticeBox, borderColor: 'var(--warn)', color: 'var(--warn)' }}>
-            {w.message}
-          </div>
-        ))}
-
-        {/* Panel AND list. The list used to be the else-branch of the panel,
-            and placing a waypoint selects it, so the running order was hidden
-            for the whole time anyone was building one. */}
-        {selected && (
-          <div style={{ marginBottom: 14 }}>
-            <WaypointPanel
-              waypoint={selected}
-              index={selectedIndex}
-              total={waypoints.length}
-              grid={grid}
-              style={settings.style}
-              generated={selectedShot.intent}
-              clipped={selectedShot.clipped}
-              onChange={(patch) => updateWaypoint(selected.id, patch)}
-              onRemove={() => removeWaypoint(selected.id)}
-              onReorder={(d) => reorderWaypoint(selected.id, d)}
-              onClose={() => select(null)}
-            />
-          </div>
-        )}
-
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-          <div style={sectionLabel}>Waypoints ({waypoints.length})</div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0' }}>
-            {waypoints.map((w, i) => {
-              const shot = path?.shots.find((s) => s.waypointId === w.id);
-              return (
-                <li key={w.id}>
-                  <button
-                    className={w.id === selectedId ? 'primary' : undefined}
-                    onClick={() => select(w.id)}
-                    style={{ width: '100%', textAlign: 'left', marginBottom: 4, padding: '6px 9px' }}
-                  >
-                    <strong>{i + 1}.</strong>{' '}
-                    {shot ? `${shot.shotType} · ${shot.duration.toFixed(1)}s` : 'not generated'}
-                    <span style={{ color: 'var(--muted)', fontSize: 10 }}>
-                      {' '}({w.position[0].toFixed(1)}, {w.position[2].toFixed(1)})
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
       </aside>
     </div>
   );
@@ -389,30 +479,9 @@ function LayerToggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        fontSize: 12, padding: '3px 0', cursor: 'pointer',
-      }}
-    >
+    <label className="plan__layer">
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
   );
 }
-
-const sectionLabel: React.CSSProperties = {
-  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
-  color: 'var(--muted)', marginBottom: 6,
-};
-
-const noticeBox: React.CSSProperties = {
-  border: '1px solid', borderRadius: 6, padding: '7px 9px',
-  fontSize: 11, marginBottom: 6, lineHeight: 1.45,
-};
-
-const overlayBadge: React.CSSProperties = {
-  position: 'absolute', top: 12, left: 12,
-  background: 'var(--panel)', border: '1px solid var(--line)',
-  borderRadius: 'var(--radius)', padding: '6px 10px', fontSize: 12,
-};
