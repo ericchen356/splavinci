@@ -38,6 +38,17 @@ export type WalkGrid = {
   floorY: Float32Array;
   /** World-space distance to the nearest blocked-or-void cell. */
   clearance: Float32Array;
+  /**
+   * Median height across cells that have floor.
+   *
+   * The representative ground level, for cells that have none of their own.
+   * floorBounds.max.y - the previous fallback, described as "the walk surface"
+   * - is the HIGHEST floor point anywhere, which is fine for a flat fixture and
+   * badly wrong for terrain with metres of relief: on hobbiton it is 3.50m
+   * against a median of 0.25m, so a shot over a void cell performed itself
+   * nearly 5m above the local ground.
+   */
+  medianFloorY: number;
   bounds: THREE.Box3;
   /** Camera corridor, as offsets above each cell's OWN floor height. */
   band: { low: number; high: number };
@@ -158,6 +169,25 @@ function chamferDistance(walkable: Uint8Array, cols: number, rows: number): Floa
   const d = new Float32Array(cols * rows);
 
   for (let i = 0; i < d.length; i++) d[i] = walkable[i] ? BIG : 0;
+
+  // Seed the outside as solid.
+  //
+  // Relaxing only against in-grid neighbours makes everything beyond the grid
+  // implicitly free space, so a walkable cell on the outermost ring reports
+  // enormous clearance while sitting at the edge of all known geometry -
+  // measured at 10.95m of "clearance" 0.113m from the void on hobbiton, where
+  // 240 walkable cells sit on that ring. A* then treats the rim of the capture
+  // as its cheapest corridor (high clearance means no tightness penalty) and
+  // the wall-distance rule ranks it as the most open spot in the scene.
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c;
+      if (!walkable[i]) continue;
+      const toEdge = Math.min(c, r, cols - 1 - c, rows - 1 - r) + 0.5;
+      const seeded = toEdge * D_ORTH;
+      if (seeded < d[i]) d[i] = seeded;
+    }
+  }
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -296,9 +326,16 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
     clearance[i] = clearanceCells[i] >= 1e9 ? Infinity : clearanceCells[i] * cellSize;
   }
 
+  const knownHeights: number[] = [];
+  for (let i = 0; i < count; i++) if (!Number.isNaN(floorY[i])) knownHeights.push(floorY[i]);
+  knownHeights.sort((a, b) => a - b);
+  const medianFloorY = knownHeights.length
+    ? knownHeights[knownHeights.length >> 1]
+    : (Number.isFinite(collider.floorBounds.max.y) ? collider.floorBounds.max.y : 0);
+
   return {
     cellSize, cols, rows, originX, originZ,
-    blocked, floor, floorY, clearance, bounds, band,
+    blocked, floor, floorY, clearance, bounds, band, medianFloorY,
   };
 }
 

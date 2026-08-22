@@ -169,9 +169,9 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   const grid = cache.grid;
   const gridMs = now() - gt0;
 
-  const fallbackFloorY = Number.isFinite(input.collider.floorBounds.max.y)
-    ? input.collider.floorBounds.max.y
-    : 0;
+  // The grid's median floor, not the collider's highest point: see
+  // WalkGrid.medianFloorY.
+  const fallbackFloorY = grid.medianFloorY;
 
   /* ---- resolve every shot up front; travel timing depends on it ---- */
   const preset = STYLE_PRESETS[input.settings.style];
@@ -701,7 +701,17 @@ function fitShotToRoom(
   ctx: ShotContext,
   radius: number,
 ): FittedShot {
-  const SAMPLES = 24;
+  // Sample density follows the shot's own reach, not a fixed count.
+  //
+  // At 24 samples a wide orbit on a large capture tested one point every 2.08m
+  // against a 0.30m clearance gate, so the loop could accept - and report as
+  // "tightened to clear the walls" - a shot whose shipped frames still put the
+  // camera inside a wall. Measured on hobbiton: 4 of 372 probe spots.
+  const reach = Math.max(
+    ctx.anchor.distanceTo(ctx.target),
+    AMPLITUDE_REACH_FLOOR,
+  ) * Math.max(1, ctx.intensity);
+  const SAMPLES = Math.max(24, Math.ceil((reach * Math.PI) / Math.max(0.05, radius * 0.75)));
   const clips = (candidate: ShotContext, type: ShotType): boolean => {
     for (let i = 0; i <= SAMPLES; i++) {
       const { position } = sampleShot(type, candidate, i / SAMPLES);
@@ -733,6 +743,9 @@ function fitShotToRoom(
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
+
+/** Smallest reach assumed when sizing the shot clip test, in metres. */
+const AMPLITUDE_REACH_FLOOR = 1.8;
 
 /**
  * Seconds over which a travel leg eases off its neighbouring shot's pose.
