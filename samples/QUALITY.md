@@ -264,3 +264,56 @@ npx tsx scripts/path-vs-splat.ts \
 `scene-quality.ts` is the one that applies `splatTransform` before measuring;
 `path-lab.ts` and `path-vs-splat.ts` read the raw frame, which is fine for
 checking topology and wrong for reading distances off.
+
+---
+
+## Re-rendered after the input-contract fix (22 Aug 2026)
+
+birch-row and foundry-loft were re-generated with `photoRole: 'inspiration'` —
+one anchor photo instead of three or four, plus a coherence clause, an envelope
+clause and `disable_recaption`. See the commit
+"fix(marble): stop asking Marble to reconcile four different flats" for why the
+old contract produced collaged geometry.
+
+**Only the input contract changed.** Same model (`marble-1.1`), same 500k SPZ
+tier, same scene folders. The model was deliberately NOT upgraded at the same
+time, so the difference below is attributable.
+
+| | birch-row before | birch-row after | foundry-loft before | foundry-loft after |
+|---|---|---|---|---|
+| photos sent | 4 | **1** | 3 | **1** |
+| prompt type | multi-image | **image** | multi-image | **image** |
+| core extent | 8.4 × 3.5 × 12.0 m | **6.3 × 3.1 × 7.8 m** | 11.9 × 5.7 × 14.2 m | **9.6 × 4.0 × 16.6 m** |
+| plan asks | 8.0 × 6.4 m, 2.45 m | — | 14.4 × 9.8 m, 4.1 m | — |
+| floor area over core | 100.6 m² (2.3× plan) | **48.9 m² (1.14×)** | 169.7 m² | **159.7 m²** |
+| opaque splats / m² | 3 982 | **8 252** | 2 446 | **2 622** |
+| floor support | 93.4% | 79.4% | 77.4% | **82.9%** |
+| largest hole | 1.4 m² | 4.7 m² | 9.4 m² | 9.8 m² |
+| enclosure | 91.5% | **96.4%** | 98.6% | 98.9% |
+| largest reachable region | 86.5% | 70.0% | **43.0%** | **91.1%** |
+| regions at 0.30 m clearance | 4 | 4 | 23 | **9** |
+| clearance settled at | 0.10 m | **0.18 m** | 0.10 m | 0.10 m |
+
+### What moved, and what did not
+
+**Scale and coherence, which were the complaint.** birch-row was 2.3× its own
+plan and is now within 14% of it; its ceiling came down from 3.5 m toward the
+2.45 m asked for, and it is one connected region instead of three. foundry-loft
+went from **43% to 91%** of its walkable floor reachable in one piece — the
+number that had it marked marginal — and its ceiling landed at 4.0 m against
+4.1 m asked.
+
+**Density doubled on birch-row**, 3 982 → 8 252 opaque splats per m², because
+the same 500k budget now covers half the area. That is the direct answer to
+"only looks good from certain angles": splat count was never the bottleneck,
+the area it was spread over was.
+
+**Floor coverage regressed on birch-row**, 93.4% → 79.4%, with the largest hole
+growing 1.4 → 4.7 m² (2.4 → 5.2 m² unsupported in absolute terms). Not
+explained. A denser SPZ tier or a re-roll are the candidates; it is a smaller
+problem than an oversized collage, because a hole can be avoided by the camera
+and a wrong building cannot.
+
+**maple-street was NOT re-rendered** and is still on the old three-photo
+multi-image contract. Its numbers above are unchanged and are not comparable to
+the two rows next to them.
