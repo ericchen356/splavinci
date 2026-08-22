@@ -1,35 +1,22 @@
 /**
  * Step 4 of path generation: resolve what each waypoint's shot actually is.
  *
- * Each waypoint carries a controlSpectrum from 0 (let the system decide) to 1
- * (do exactly what I picked). The two ends are easy. The middle is the point of
- * the feature, and it needs care, because the three things being resolved do
- * not interpolate the same way:
+ * A waypoint is either 'auto' or 'manual'. Manual uses the shot type and
+ * duration stored on the waypoint verbatim; auto infers both from the
+ * waypoint's surroundings. There is no blending between them - a categorical
+ * choice does not have a meaningful midpoint, and pretending otherwise made
+ * the duration you typed not the duration you got.
  *
- *   duration   genuinely continuous - lerp it.
- *   intensity  genuinely continuous - lerp it. This is what stops the midpoint
- *              from being a hard switch: a half-manual orbit is a real orbit
- *              with a gentler sweep, not a different shot.
- *   shotType   categorical. There is no halfway between "orbit" and "pan", so
- *              it changes over at 0.5. That is a judgement call rather than a
- *              derivation, so both candidates and the blend factor are reported
- *              and the UI can show which side of the line a waypoint sits on.
+ * Emphasis is the one genuinely continuous control, and applies in both modes:
+ * it scales how far the camera travels during the shot, so an inferred shot can
+ * be played down without taking it over, and a manual shot can be gentle.
  *
- * THE AUTO END READS THE WALLS, NOT OBJECTS.
- * There is no per-object manifest any more - a waypoint is a raw point the user
- * clicked on the splat - so the only thing the system knows about a stop is
- * where it sits relative to the room's own geometry. That turns out to be
- * enough, and it comes for free: the walk grid already carries a `clearance`
- * field, the world-space distance from every cell to the nearest wall or void.
- *
- *   close to a wall  the wall is what fills the frame  -> push in on it
- *   out in the open  the room is what fills the frame  -> pan across it
- *
- * "Close" cannot be a fixed number of metres: the app loads both a 10 x 8 m flat
- * and a ~30 x 37 m outdoor capture. A waypoint's clearance is ranked against
- * every other walkable cell in the same scene instead (see `roomShape`), so the
- * crossover lands on that room's own median and both branches stay live at any
- * scale, without a metre threshold anywhere in the rule.
+ * The auto end reads geometry rather than labels. There are no meshed objects
+ * to identify, so it measures the waypoint's distance to the nearest wall -
+ * already computed as the walk grid's clearance field - and expresses it as a
+ * rank within that scene's own clearance distribution. Ranking rather than
+ * thresholding in metres is what lets the same rule behave sensibly in a small
+ * flat and in a large outdoor capture.
  */
 
 import type * as THREE from 'three';
@@ -380,8 +367,16 @@ export function resolveShot(
   const duration = clamp(manual ? waypoint.duration : autoDuration, 0.4, 30);
   // Emphasis scales the style's amplitude in both modes, which is what makes a
   // gentle manual orbit expressible.
+  //
+  // Deliberately NOT clamped to 1. Clamping there made the top of the slider
+  // dead, and dead by an amount that depended on the global style: cinematic
+  // sets preset.intensity to 1.0, so every emphasis above 100% did nothing at
+  // all while the label happily read 200% - in the style whose whole promise is
+  // "biggest moves". Amplitude is a multiplier on the shot's own geometry, so
+  // values above 1 are meaningful; sampleShot honours them and fitShotToRoom
+  // still pulls back anything that would clip a wall.
   const emphasis = clamp(waypoint.emphasis, EMPHASIS_RANGE.min, EMPHASIS_RANGE.max);
-  const intensity = clamp(preset.intensity * emphasis, 0, 1);
+  const intensity = clamp(preset.intensity * emphasis, 0, EMPHASIS_RANGE.max);
 
   const source: ShotIntent['source'] = manual ? 'manual' : 'auto';
   const emphasisNote =

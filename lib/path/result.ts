@@ -86,12 +86,18 @@ export const EMPTY_PATH: PathResult = {
   },
 };
 
-/** Frame at or just before `time`. Binary search; frames are time-ordered. */
-export function frameAtTime(frames: readonly FrameEntry[], time: number): FrameEntry | null {
-  if (frames.length === 0) return null;
-  if (time <= frames[0].timeSeconds) return frames[0];
-  const last = frames[frames.length - 1];
-  if (time >= last.timeSeconds) return last;
+/**
+ * Index of the frame at or just before `time`. Binary search; frames are
+ * time-ordered. Returns -1 for an empty table.
+ *
+ * The index, not the frame, is the primitive: sampleAtTime needs the next
+ * frame too, and recovering the position with indexOf turned an O(log n)
+ * lookup into an O(n) scan run twice per rendered frame.
+ */
+export function frameIndexAtTime(frames: readonly FrameEntry[], time: number): number {
+  if (frames.length === 0) return -1;
+  if (time <= frames[0].timeSeconds) return 0;
+  if (time >= frames[frames.length - 1].timeSeconds) return frames.length - 1;
 
   let lo = 0;
   let hi = frames.length - 1;
@@ -100,7 +106,13 @@ export function frameAtTime(frames: readonly FrameEntry[], time: number): FrameE
     if (frames[mid].timeSeconds <= time) lo = mid;
     else hi = mid;
   }
-  return frames[lo];
+  return lo;
+}
+
+/** Frame at or just before `time`. */
+export function frameAtTime(frames: readonly FrameEntry[], time: number): FrameEntry | null {
+  const i = frameIndexAtTime(frames, time);
+  return i < 0 ? null : frames[i];
 }
 
 /** Interpolated camera state at `time`, for smooth scrubbing between frames. */
@@ -108,9 +120,9 @@ export function sampleAtTime(
   frames: readonly FrameEntry[],
   time: number,
 ): { position: Vec3; lookAt: Vec3; activeWaypointId: string } | null {
-  if (frames.length === 0) return null;
-  const a = frameAtTime(frames, time)!;
-  const i = frames.indexOf(a);
+  const i = frameIndexAtTime(frames, time);
+  if (i < 0) return null;
+  const a = frames[i];
   const b = i + 1 < frames.length ? frames[i + 1] : a;
   const span = b.timeSeconds - a.timeSeconds;
   const t = span > 1e-6 ? Math.min(1, Math.max(0, (time - a.timeSeconds) / span)) : 0;

@@ -40,6 +40,9 @@ const AMPLITUDE = {
   riseHeight: 1.4,
   dollyLength: 1.8,
   minTargetRadius: 0.9,
+  // Past this an "orbit" stops reading as a move around a subject and starts
+  // reading as the camera relocating across the room.
+  maxOrbitRadius: 3.2,
 };
 
 function horizontalDelta(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3 {
@@ -53,7 +56,9 @@ function horizontalDelta(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3 
  * accelerates out of the previous stop and settles into the next.
  */
 export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): CameraSample {
-  const k = Math.max(0, Math.min(1, ctx.intensity));
+  // Not clamped to 1: emphasis above 100% is a real request for a bigger
+  // move, and generate.ts pulls back anything that would clip a wall.
+  const k = Math.max(0, ctx.intensity);
   const t = Math.max(0, Math.min(1, u));
   const anchor = ctx.anchor;
   const target = ctx.target;
@@ -67,18 +72,34 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
       return { position: anchor.clone(), lookAt: target.clone() };
 
     case 'orbit': {
-      if (!hasTarget) return { position: anchor.clone(), lookAt: aheadOf(anchor, ctx.tangent) };
+      // Orbit a subject NEAR the waypoint, not whatever the shot nominally
+      // frames. Framing falls back to the room's centre, and orbiting that at
+      // its true radius swings the camera across the whole space: from a
+      // corner of a 10x8 m flat the arc ran 6 m and ended 5.6 m from the
+      // marker the user placed, and a waypoint sitting exactly at the centre
+      // got radius 0 - a completely static frame still labelled "orbit".
+      // Clamping the radius and pulling the centre in keeps the camera where
+      // it was put, and guarantees the shot actually moves.
+      const dir = hasTarget
+        ? toTarget.clone().normalize()
+        : ctx.tangent.clone().setY(0).normalize();
+      if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
+      const orbitRadius = Math.min(
+        Math.max(hasTarget ? toTarget.length() : 0, AMPLITUDE.minTargetRadius),
+        AMPLITUDE.maxOrbitRadius,
+      );
+      const centre = anchor.clone().addScaledVector(dir, orbitRadius);
       // Sweep centred on the waypoint's own bearing, so the shot starts where
       // the camera already is rather than teleporting to the arc's start.
-      const start = Math.atan2(anchor.z - target.z, anchor.x - target.x);
+      const start = Math.atan2(anchor.z - centre.z, anchor.x - centre.x);
       const angle = start + (t - 0.5) * AMPLITUDE.orbitSweep * k;
       return {
         position: new THREE.Vector3(
-          target.x + Math.cos(angle) * radius,
+          centre.x + Math.cos(angle) * orbitRadius,
           anchor.y,
-          target.z + Math.sin(angle) * radius,
+          centre.z + Math.sin(angle) * orbitRadius,
         ),
-        lookAt: target.clone(),
+        lookAt: centre.setY(target.y),
       };
     }
 

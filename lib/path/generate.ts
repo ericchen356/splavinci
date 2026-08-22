@@ -172,10 +172,15 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   for (let i = 0; i < waypoints.length - 1; i++) {
     const a = waypoints[i];
     const b = waypoints[i + 1];
+    // `pinned` is deliberately NOT part of the key. It used to be, and that
+    // made every drag cost the A* and spline twice: the pinned generate stored
+    // the leg under `...|pinned`, generate() then cleared the pins, and the
+    // next lookup missed on `...|` - a key never written for that position.
+    // The `!a.pinned && !b.pinned` guard below is what scopes the rebuild;
+    // the key only needs to describe the geometry.
     const key = [
       'travel', a.id, b.id, positionKey(a), positionKey(b),
       input.settings.style, round(opts.radius, 3), round(opts.cameraHeight, 3),
-      a.pinned || b.pinned ? 'pinned' : '',
     ].join('|');
 
     const hit = cache.legs.get(key);

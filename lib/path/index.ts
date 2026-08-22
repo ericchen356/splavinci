@@ -41,7 +41,7 @@ export {
 } from './generate';
 
 export {
-  EMPTY_PATH, frameAtTime, sampleAtTime, segmentAtTime,
+  EMPTY_PATH, frameAtTime, frameIndexAtTime, sampleAtTime, segmentAtTime,
   type PathResult, type PathSegmentInfo, type PathStats,
   type PathWarning, type PathWarningCode,
 } from './result';
