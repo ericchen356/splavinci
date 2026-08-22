@@ -43,6 +43,17 @@ const HEIGHT_BIN = Number(process.env.HEIGHT_BIN ?? 0.25);
 const MIN_OPACITY = Number(process.env.MIN_OPACITY ?? 0.12);
 const BAND_LOW = Number(process.env.BAND_LOW ?? 0.5);
 const BAND_HIGH = Number(process.env.BAND_HIGH ?? 2.2);
+
+// Height of the obstacle slabs this script EMITS, above each cell's floor.
+//
+// Deliberately inside the walk grid's own camera band (lib/path/grid.ts, about
+// floor +1.05..2.05) rather than spanning it. The grid tests obstacles per
+// triangle, so a slab whose caps sit outside the band contributes only its four
+// thin side faces and leaves its own footprint unmarked; the grid then closes
+// the gap and inflates every obstacle by about 40% doing so, which fragments
+// the walkable space. Caps inside the band rasterise the footprint directly.
+const EMIT_LOW = Number(process.env.EMIT_LOW ?? 1.15);
+const EMIT_HIGH = Number(process.env.EMIT_HIGH ?? 1.95);
 // Fraction of a column's peak density that counts as "a surface starts here".
 const FLOOR_PEAK_FRACTION = Number(process.env.FLOOR_PEAK_FRACTION ?? 0.18);
 
@@ -436,8 +447,8 @@ for (let c = 0; c < cellCount; c++) {
   const y = worldY(c);
   if (blocked[c]) {
     obstacleParts.push(box(
-      [worldX(c), y + BAND_LOW, worldZ(c)],
-      [worldX(c) + CELL, y + BAND_HIGH, worldZ(c) + CELL],
+      [worldX(c), y + EMIT_LOW, worldZ(c)],
+      [worldX(c) + CELL, y + EMIT_HIGH, worldZ(c) + CELL],
     ));
   } else {
     floorParts.push(box([worldX(c), y - 0.05, worldZ(c)], [worldX(c) + CELL, y, worldZ(c) + CELL]));

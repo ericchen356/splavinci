@@ -6,6 +6,7 @@
 
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { ASSETS } from '@/lib/assets';
+import type { Vec3 } from '@/lib/types';
 import { buildColliderData, type ColliderData } from './collider';
 import type { SplatSourceKind } from './assetTypes';
 
@@ -83,7 +84,17 @@ export async function resolveSplatSource(): Promise<SplatResolution | null> {
 export async function loadCollider(
   url: string = ASSETS.collider,
   onProgress?: ProgressFn,
+  /** Applied before the mesh is flattened, so every downstream consumer sees
+   *  world space and nothing has to remember to transform it again. */
+  placement?: { position: Vec3; rotation: Vec3; scale: number },
 ): Promise<ColliderData> {
   const gltf = await gltfLoader().loadAsync(url, (e) => onProgress?.(progressFraction(e)));
-  return buildColliderData(gltf.scene);
+  const root = gltf.scene;
+  if (placement) {
+    root.scale.setScalar(placement.scale);
+    root.rotation.set(placement.rotation[0], placement.rotation[1], placement.rotation[2]);
+    root.position.set(placement.position[0], placement.position[1], placement.position[2]);
+    root.updateMatrixWorld(true);
+  }
+  return buildColliderData(root);
 }

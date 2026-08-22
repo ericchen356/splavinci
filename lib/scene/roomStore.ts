@@ -191,8 +191,10 @@ async function runRoomLoad(set: SetFn): Promise<void> {
 async function loadColliderInto(set: SetFn): Promise<void> {
   set({ collider: { ...INITIAL_COLLIDER, phase: 'loading' } });
   try {
-    const data = await loadCollider(undefined, (progress) =>
-      set((s) => ({ collider: { ...s.collider, progress } })),
+    const data = await loadCollider(
+      undefined,
+      (progress) => set((s) => ({ collider: { ...s.collider, progress } })),
+      getAssetSet().colliderPlacement,
     );
     set({
       collider: { phase: 'loaded', progress: 1, error: null, data },

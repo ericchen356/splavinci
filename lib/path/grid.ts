@@ -69,8 +69,17 @@ const DEFAULTS = {
   targetResolution: 160,
   minCellSize: 0.05,
   maxCellSize: 1.0,
-  bandLow: 0.25,
-  bandHigh: 2.1,
+  // The corridor the CAMERA occupies, not "everything above the floor".
+  //
+  // The band used to start at 0.25 m, which made a coffee table a wall: on a
+  // real furnished interior that marked 5439 cells blocked against 3963
+  // walkable and shattered the apartment into 68 disconnected regions. The
+  // camera flies at about 1.55 m and simply passes over furniture; what stops
+  // it is geometry at its own height. Starting the band just below eye level
+  // keeps walls, worktops-to-ceiling and doorframes blocking while letting
+  // sofas, tables and beds be flown over, which is what they are.
+  bandLow: 1.05,
+  bandHigh: 2.05,
 };
 
 /** Pick a cell size that resolves the scene without exploding the cell count. */
@@ -287,33 +296,53 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
     ? collider.floorBounds.max.y
     : bounds.min.y;
 
-  // Obstacles: accumulate the vertical span of obstacle geometry over each
-  // cell, then test that span against the band above THAT CELL'S OWN floor.
+  // Obstacles: does any single triangle actually sit at camera height here.
   //
-  // Per cell, and against local floor height, for two distinct reasons:
+  // Tested per TRIANGLE, not accumulated per cell. Accumulating a [min, max]
+  // span over every obstacle triangle covering a cell works only for a
+  // collider built from separate wall boxes with no ceiling. A real capture
+  // arrives as a closed shell - Marble's is one 209k-triangle mesh including
+  // the ceiling - so every cell's span ran floor to ceiling, intersected the
+  // band by definition, and the entire apartment came out blocked.
   //
-  //  - A solid wall's side faces project to thin lines in XZ, while its top and
-  //    bottom caps sit outside the corridor. Filtering triangles individually
-  //    rasterises only those slivers and leaves the wall's interior walkable -
-  //    a phantom corridor straight through it once cells are coarse enough.
-  //    Accumulating a span per cell lets the caps contribute their heights
-  //    across the whole footprint, so the interior blocks like the solid it is.
-  //  - A single global band assumes a flat floor. On terrain derived from a
-  //    real capture the ground can climb many metres across the scene, and a
-  //    band pinned to the highest floor point floats above everything: nothing
-  //    intersects it and not one cell comes out blocked.
-  const obstacleMinY = new Float32Array(count).fill(Infinity);
-  const obstacleMaxY = new Float32Array(count).fill(-Infinity);
+  // A reconstructed shell has no wall interiors to fill, so per-triangle is
+  // exact for it. The synthetic fixture's solid wall boxes are the case it
+  // under-marks, since a box's side faces project to thin lines in XZ; the
+  // close() below fills those slivers.
   rasterise(collider.obstacleGeometry, (i, triMinY, triMaxY) => {
-    if (triMinY < obstacleMinY[i]) obstacleMinY[i] = triMinY;
-    if (triMaxY > obstacleMaxY[i]) obstacleMaxY[i] = triMaxY;
+    const base = Number.isNaN(floorY[i]) ? fallbackFloorY : floorY[i];
+    if (triMaxY >= base + band.low && triMinY <= base + band.high) blocked[i] = 1;
   });
 
-  for (let i = 0; i < count; i++) {
-    if (obstacleMaxY[i] === -Infinity) continue;
-    const base = Number.isNaN(floorY[i]) ? fallbackFloorY : floorY[i];
-    if (obstacleMaxY[i] >= base + band.low && obstacleMinY[i] <= base + band.high) {
-      blocked[i] = 1;
+  // Close one cell: fills the interior of a solid wall whose side faces
+  // rasterised to thin lines, without inventing obstacles anywhere open.
+  {
+    const dilated = new Uint8Array(count);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        let on = 0;
+        for (let dz = -1; dz <= 1 && !on; dz++) {
+          for (let dx = -1; dx <= 1 && !on; dx++) {
+            const nx = c + dx, nz = r + dz;
+            if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+            if (blocked[nz * cols + nx]) on = 1;
+          }
+        }
+        dilated[r * cols + c] = on;
+      }
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        let all = 1;
+        for (let dz = -1; dz <= 1 && all; dz++) {
+          for (let dx = -1; dx <= 1 && all; dx++) {
+            const nx = c + dx, nz = r + dz;
+            if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
+            if (!dilated[nz * cols + nx]) all = 0;
+          }
+        }
+        if (all) blocked[r * cols + c] = 1;
+      }
     }
   }
 

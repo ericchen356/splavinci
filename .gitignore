@@ -15,3 +15,5 @@ next-env.d.ts
 # derived from a local capture that is not in the repo
 public/hobbiton/
 public/derived/
+
+public/generated/
