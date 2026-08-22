@@ -14,10 +14,10 @@
  * read off. A plan whose rooms are unnamed and unmeasured produces "some rooms,
  * probably", which produces a world that matches nothing.
  *
- * The three plans are deliberately unlike each other - a compact one-bed, a
- * two-bed with a central hall, an open-plan loft - so a difference downstream
- * can be attributed to the layout rather than to the renderer having drawn the
- * same flat three times.
+ * The four plans are deliberately unlike each other - a compact one-bed, a
+ * two-bed with a central hall, an open-plan loft, a long thin terrace served by
+ * a single corridor - so a difference downstream can be attributed to the layout
+ * rather than to the renderer having drawn the same flat four times.
  *
  * Geometry is in metres, x right and y down, matching lib/path's floor plane.
  */
@@ -322,7 +322,146 @@ const foundryLoft = {
   ],
 };
 
-export const PLANS = { 'maple-street': mapleStreet, 'birch-row': birchRow, 'foundry-loft': foundryLoft };
+/* -------------------------------------------------------------------------- */
+/* scene 4 - kiln-terrace: Victorian terrace, one corridor front to back      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Long, thin and served by a single spine.
+ *
+ * The other three are compact enough that any room is two turns from any other.
+ * This one is 14 m front to back on a 5.4 m frontage, and every habitable room
+ * hangs off one 9.7 m corridor pinned to the party wall - so a camera crossing
+ * it has no choice but to travel the length of the house, which is the case the
+ * path generator was never given.
+ *
+ * It is an END-of-terrace, and that is load-bearing rather than decorative: the
+ * west wall is a party wall with no openings at all, so every window is in the
+ * front elevation, the east flank or the back. Light arrives from one side of a
+ * building whose long axis runs the other way.
+ */
+
+const K_EXT = 0.28;
+const K_INT = 0.12;
+
+const kilnTerrace = {
+  id: 'kiln-terrace',
+  name: 'Kiln Terrace',
+  subtitle: 'Victorian end-of-terrace, ground floor · one hallway front to back',
+  ceiling: 2.9,
+  size: [5.4, 14.0],
+  walls: [
+    // Street frontage. The bay projects 0.55 m and the front door sits in the
+    // shadow it casts, which is the whole reason the top-left corner is void.
+    { x: 1.82, y: 0, w: 3.58, h: K_EXT },
+    { x: 1.82, y: 0, w: K_EXT, h: 0.83 },
+    { x: 0, y: 0.55, w: 2.1, h: K_EXT },
+
+    { x: 0, y: 0.55, w: K_EXT, h: 13.45 },
+    { x: 5.4 - K_EXT, y: 0, w: K_EXT, h: 14.0 },
+    { x: 0, y: 14.0 - K_EXT, w: 5.4, h: K_EXT },
+
+    vWall(2.04, 0.83, 10.58, K_INT),
+    hWall(2.04, 5.12, 5.11, K_INT),
+    hWall(2.04, 5.12, 8.91, K_INT),
+    vWall(3.61, 8.91, 10.58, K_INT),
+    hWall(0.28, 5.12, 10.58, K_INT),
+
+    // Chimney breasts. On an end house the stack is in the outer flank, so they
+    // project into the rooms rather than into the party wall.
+    { x: 4.8, y: 1.2, w: 0.32, h: 1.3 },
+    { x: 4.8, y: 5.5, w: 0.32, h: 1.3 },
+  ],
+  rooms: [
+    { name: 'Front parlour', x: 2.1, y: 0.28, w: 3.02, h: 4.77, labelAt: [3.61, 3.95] },
+    { name: 'Hallway', x: 0.28, y: 0.83, w: 1.7, h: 9.69, labelAt: [1.13, 3.6], small: true, noArea: true, tint: true },
+    { name: 'Dining room', x: 2.1, y: 5.17, w: 3.02, h: 3.68, labelAt: [3.75, 8.5] },
+    { name: 'WC', x: 2.1, y: 8.97, w: 1.45, h: 1.55, labelAt: [2.9, 9.45], small: true },
+    { name: 'Larder', x: 3.67, y: 8.97, w: 1.45, h: 1.55, labelAt: [4.4, 9.4], small: true },
+    { name: 'Kitchen', x: 0.28, y: 10.64, w: 4.84, h: 3.08, labelAt: [3.7, 12.55] },
+  ],
+  openings: [
+    { kind: 'door', dir: 'h', x: 0.6, y: 0.69, len: 0.95, t: K_EXT, hinge: 'start', swing: 'front' },
+    { kind: 'door', dir: 'v', x: 2.04, y: 3.85, len: 0.9, t: K_INT, hinge: 'end', swing: 'front' },
+    { kind: 'opening', dir: 'h', x: 3.4, y: 5.11, len: 1.4, t: K_INT },
+    { kind: 'door', dir: 'v', x: 2.04, y: 5.45, len: 0.9, t: K_INT, hinge: 'start', swing: 'front' },
+    { kind: 'door', dir: 'v', x: 2.04, y: 9.55, len: 0.7, t: K_INT, hinge: 'start', swing: 'back' },
+    { kind: 'opening', dir: 'h', x: 0.65, y: 10.58, len: 1.0, t: K_INT },
+    { kind: 'door', dir: 'h', x: 4.05, y: 10.58, len: 0.7, t: K_INT, hinge: 'start', swing: 'front' },
+    { kind: 'door', dir: 'h', x: 0.75, y: 13.86, len: 0.9, t: K_EXT, hinge: 'start', swing: 'back' },
+
+    // Three sashes across the bay.
+    { kind: 'window', dir: 'h', x: 2.35, y: 0.14, len: 0.8, t: K_EXT },
+    { kind: 'window', dir: 'h', x: 3.25, y: 0.14, len: 0.8, t: K_EXT },
+    { kind: 'window', dir: 'h', x: 4.15, y: 0.14, len: 0.8, t: K_EXT },
+
+    { kind: 'window', dir: 'v', x: 5.26, y: 3.0, len: 1.5, t: K_EXT },
+    { kind: 'window', dir: 'v', x: 5.26, y: 7.2, len: 1.4, t: K_EXT },
+    { kind: 'window', dir: 'v', x: 5.26, y: 9.45, len: 0.6, t: K_EXT },
+    { kind: 'window', dir: 'v', x: 5.26, y: 10.9, len: 0.8, t: K_EXT },
+    { kind: 'window', dir: 'h', x: 2.6, y: 13.86, len: 1.6, t: K_EXT },
+  ],
+  fixtures: [
+    // Front parlour: bay seat, sofa against the hall partition, two chairs to
+    // the hearth.
+    { kind: 'counter', x: 2.3, y: 0.34, w: 2.6, h: 0.42 },
+    { kind: 'sofa', x: 2.2, y: 1.45, w: 0.88, h: 2.0, face: 'right' },
+    { kind: 'rug', x: 3.25, y: 1.5, w: 1.45, h: 1.9 },
+    { kind: 'table', x: 3.25, y: 2.15, w: 0.7, h: 0.5 },
+    { kind: 'sofa', x: 4.0, y: 1.35, w: 0.8, h: 0.8, face: 'left' },
+    { kind: 'sofa', x: 4.0, y: 2.6, w: 0.8, h: 0.8, face: 'left' },
+
+    // Hallway: a runner the length of it, then the stair against the party wall
+    // with the passage squeezing past on the parlour side.
+    { kind: 'rug', x: 0.55, y: 1.8, w: 1.1, h: 3.8 },
+    { kind: 'stair', x: 0.34, y: 6.55, w: 0.86, h: 2.9, dir: 'v', treads: 12 },
+
+    { kind: 'table', x: 2.9, y: 6.4, w: 1.55, h: 0.95 },
+    { kind: 'table', x: 3.05, y: 5.85, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 3.85, y: 5.85, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 3.05, y: 7.48, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 3.85, y: 7.48, w: 0.42, h: 0.42 },
+    { kind: 'rug', x: 2.75, y: 5.95, w: 1.9, h: 1.9 },
+    { kind: 'wardrobe', x: 2.16, y: 7.5, w: 0.42, h: 1.1 },
+
+    { kind: 'wc', x: 2.16, y: 9.75, w: 0.42, h: 0.6 },
+    { kind: 'basin', x: 2.95, y: 10.0, w: 0.5, h: 0.4 },
+
+    { kind: 'counter', x: 3.73, y: 9.03, w: 0.36, h: 1.4 },
+    { kind: 'counter', x: 4.15, y: 10.05, w: 0.9, h: 0.4 },
+
+    { kind: 'counter', x: 2.3, y: 13.07, w: 2.75, h: 0.6, sinks: [[3.35, 13.37]] },
+    { kind: 'counter', x: 4.5, y: 11.05, w: 0.62, h: 1.85, hobs: [[4.81, 12.4]] },
+    { kind: 'table', x: 1.55, y: 11.55, w: 1.5, h: 0.9 },
+    { kind: 'table', x: 1.72, y: 11.0, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 2.5, y: 11.0, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 1.72, y: 12.55, w: 0.42, h: 0.42 },
+    { kind: 'table', x: 2.5, y: 12.55, w: 0.42, h: 0.42 },
+    { kind: 'wardrobe', x: 0.34, y: 11.9, w: 0.42, h: 1.2 },
+  ],
+  notes: [
+    { x: 0.91, y: 0.35, text: 'porch' },
+    { x: 3.61, y: 1.12, text: 'square bay · three sashes to the street' },
+    { x: 1.13, y: 2.25, text: 'party wall' },
+    { x: 4.1, y: 4.92, text: 'double doors' },
+    { x: 4.72, y: 5.42, text: 'chimney breasts on the flank wall', anchor: 'end' },
+    { x: 1.13, y: 6.35, text: 'stair up' },
+    { x: 1.13, y: 10.42, text: 'WC beneath the turn' },
+  ],
+  dimensions: [
+    { dir: 'h', from: 0, to: 5.4, at: -0.6 },
+    { dir: 'v', from: 0, to: 14.0, at: -0.6 },
+    { dir: 'h', from: 0, to: 2.04, at: 14.28 },
+    { dir: 'h', from: 2.04, to: 5.4, at: 14.28 },
+  ],
+};
+
+export const PLANS = {
+  'maple-street': mapleStreet,
+  'birch-row': birchRow,
+  'foundry-loft': foundryLoft,
+  'kiln-terrace': kilnTerrace,
+};
 
 /* -------------------------------------------------------------------------- */
 

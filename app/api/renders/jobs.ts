@@ -21,81 +21,32 @@
  * (lib/marble/cli.ts), with the same options, writing the same room.spz +
  * collider.glb + scene.json under public/generated/<id>/. This file adds only
  * what a browser needs and a terminal does not: files that arrived as bytes
- * rather than paths, and progress that can be polled.
+ * rather than paths, a video turned into frames, and progress that can be
+ * polled.
  *
- * SERVER ONLY. node:fs, node:os, and a live network client.
+ * EVERY JOB SPENDS MONEY. `buildEnvironment` is the live World Labs client and
+ * there is no builder behind it that is not — a submission that reaches this
+ * file starts a billed generation (https://platform.worldlabs.ai/billing). The
+ * cancel path exists because of that, not in spite of it.
+ *
+ * SERVER ONLY. node:fs, node:os, a child process, and a live network client.
  */
 
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, extname, join, relative, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 
 import {
-  DEFAULT_MODEL,
   MarbleError,
   buildEnvironment,
   composeIntake,
-  inspectGlb,
   isMarbleError,
   readProgress,
-  type EnvironmentBuildOptions,
-  type EnvironmentBuildResult,
-  type EnvironmentInput,
   type MarbleOperation,
 } from '@/lib/marble';
-
-/* -------------------------------------------------------------------------- */
-/* the seam                                                                   */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Stage 2, as a value rather than an import.
- *
- * `buildEnvironment` is the real thing: it uploads the photos, starts a paid
- * generation and downloads the result. Everything else in this file is written
- * against this signature so the paid call can be swapped for one that is not.
- */
-export type EnvironmentBuilder = (
-  input: EnvironmentInput,
-  options: EnvironmentBuildOptions,
-) => Promise<EnvironmentBuildResult>;
-
-/**
- * ==========================================================================
- * THE ONLY PLACE A LIVE, BILLED MARBLE GENERATION IS STARTED.
- * ==========================================================================
- *
- * Below this function nothing knows whether it is talking to World Labs. Above
- * it, `buildEnvironment` is the real API client and every call costs the
- * account credits (https://platform.worldlabs.ai/billing).
- *
- * Two ways to get the mock instead:
- *
- *   MARBLE_MOCK=1                 in the server's environment — wins over
- *                                 everything, so a machine can be pinned to
- *                                 "never spend money" for a whole session.
- *   mock=1                        on the POST body — honoured only outside
- *                                 production, so the UI can offer it as a
- *                                 checkbox against a dev server that was
- *                                 started without the env var.
- *
- * The mock writes a real, openable capture (see `mockBuildEnvironment`), so the
- * whole flow — validation, progress, the list, /plan?capture=<id> — is
- * exercisable without a single request leaving the machine.
- */
-function resolveBuilder(requestedMock: boolean): { build: EnvironmentBuilder; mock: boolean } {
-  if (mockForcedByEnv() || (requestedMock && process.env.NODE_ENV !== 'production')) {
-    return { build: mockBuildEnvironment, mock: true };
-  }
-  return { build: buildEnvironment, mock: false };
-}
-
-/** True when this server may not call Marble at all, whatever the request says. */
-export function mockForcedByEnv(): boolean {
-  const flag = process.env.MARBLE_MOCK?.trim().toLowerCase();
-  return flag === '1' || flag === 'true' || flag === 'yes';
-}
+import { framesToExtract } from './limits';
 
 /* -------------------------------------------------------------------------- */
 /* public shapes                                                              */
@@ -104,6 +55,8 @@ export function mockForcedByEnv(): boolean {
 export type JobPhase =
   | 'queued'
   | 'intake'
+  /** Pulling stills out of an uploaded walkthrough. Tens of seconds, not zero. */
+  | 'extracting'
   | 'uploading'
   | 'generating'
   | 'downloading'
@@ -130,8 +83,6 @@ export type JobView = {
   error: { message: string; hint: string | null; kind: string | null } | null;
   /** The finished capture's id, or null. Present only on `done`. */
   renderId: string | null;
-  /** Whether this job used the mock builder rather than the paid API. */
-  mock: boolean;
 };
 
 /** One uploaded file, already read off the multipart body. */
@@ -143,14 +94,14 @@ export type IncomingFile = {
 export type CreateRenderInput = {
   /** Display name. Empty means "derive one from the description". */
   name: string;
-  /** The layout sentence composeIntake folds into the prompt. Required. */
+  /** The layout sentence composeIntake folds into the prompt. Optional. */
   description: string;
   /** Materials, era, light, mood. Optional. */
   keywords: string;
   photos: IncomingFile[];
+  /** A walkthrough clip. Frames from it join `photos` as views of one space. */
+  video: IncomingFile | null;
   blueprint: IncomingFile | null;
-  /** Client asked for the mock builder. Ignored in production. */
-  mock: boolean;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -234,7 +185,8 @@ function snapshot(job: Job): JobView {
 const PHASE_FLOOR: Record<JobPhase, number> = {
   queued: 0,
   intake: 0.02,
-  uploading: 0.08,
+  extracting: 0.04,
+  uploading: 0.1,
   generating: 0.18,
   downloading: 0.78,
   done: 1,
@@ -334,8 +286,8 @@ function slugify(text: string): string {
 }
 
 /** Strip anything that could climb out of the scratch directory. */
-function safeFileName(name: string): string {
-  return basename(name).replace(/[^A-Za-z0-9._-]+/g, '_').slice(-64) || 'photo';
+function safeFileName(name: string, fallback = 'photo'): string {
+  return basename(name).replace(/[^A-Za-z0-9._-]+/g, '_').slice(-64) || fallback;
 }
 
 /**
@@ -373,7 +325,6 @@ export async function startRenderJob(input: CreateRenderInput): Promise<JobView>
 
   const name = input.name.trim() || firstSentence(input.description) || 'Untitled render';
   const setId = await reserveSetId(name, input.description);
-  const { build, mock } = resolveBuilder(input.mock);
 
   const job: Job = {
     abort: new AbortController(),
@@ -385,21 +336,20 @@ export async function startRenderJob(input: CreateRenderInput): Promise<JobView>
       name,
       phase: 'queued',
       progress: 0,
-      message: mock ? 'Queued (mock builder — nothing will be sent to Marble).' : 'Queued.',
+      message: 'Queued.',
       log: [],
       startedAt: new Date().toISOString(),
       finishedAt: null,
       elapsedMs: 0,
       error: null,
       renderId: null,
-      mock,
     },
   };
   JOBS.set(job.view.id, job);
 
   // Deliberately not awaited: the POST answers with the id while this runs on.
   // Nothing rejects out of `run`, so there is no unhandled rejection to catch.
-  void run(job, input, build);
+  void run(job, input);
 
   return snapshot(job);
 }
@@ -409,13 +359,13 @@ function firstSentence(text: string): string {
   return trimmed.replace(/[.!?]+$/, '').slice(0, 64);
 }
 
-async function run(job: Job, input: CreateRenderInput, build: EnvironmentBuilder): Promise<void> {
+async function run(job: Job, input: CreateRenderInput): Promise<void> {
   const scratch = await mkdtemp(join(tmpdir(), 'splavinci-intake-'));
   job.scratchDir = scratch;
 
   try {
     enter(job, 'intake');
-    job.view.message = 'Checking the photos and composing the prompt…';
+    job.view.message = 'Reading the upload…';
 
     const photoPaths: string[] = [];
     for (const [index, photo] of input.photos.entries()) {
@@ -424,31 +374,45 @@ async function run(job: Job, input: CreateRenderInput, build: EnvironmentBuilder
       photoPaths.push(path);
     }
 
-    /* composeIntake requires a blueprint path that exists — it never opens the
-       file, but it refuses to invent a layout for one it cannot account for.
-       When the user uploads no floor plan the layout genuinely did come from
-       the sentence they typed, so that sentence is written to a file and named
-       as the source. Provenance then says "layout.txt", which is true, rather
-       than pointing at a photo that is not a plan. */
-    const blueprintPath = join(scratch, input.blueprint ? safeFileName(input.blueprint.name) : 'layout.txt');
-    await writeFile(
-      blueprintPath,
-      input.blueprint ? input.blueprint.bytes : `${input.description.trim()}\n`,
-    );
+    const framePaths = input.video
+      ? await videoFrames(job, scratch, input.video, photoPaths.length)
+      : [];
+    const images = [...photoPaths, ...framePaths];
 
-    const intake = await composeIntake({
-      blueprint: { path: blueprintPath, layoutDescription: input.description },
-      photos: photoPaths,
-      keywords: input.keywords,
-    });
+    /* WHY THE VIDEO RUN SWITCHES photoRole.
+       Intake defaults to 'inspiration' — one anchor photo sent, the rest turned
+       into adjectives — because a set of stock interiors is usually several
+       different rooms being asserted to be one, and Marble reconciles that
+       contradiction by collaging them. Frames of a single continuous walk are
+       the opposite case: they really are views of one space, which is what
+       multi-image reconstruction is for. That only holds if the whole sweep is
+       sent, so a run with frames in it goes as 'views' and a photos-only run
+       keeps the cautious default. */
+    job.view.message = 'Composing the prompt…';
+    const intake = await composeIntake(
+      {
+        blueprint: {
+          path: await writeLayoutSource(scratch, input),
+          layoutDescription: layoutSentence(input),
+        },
+        photos: images,
+        keywords: input.keywords,
+      },
+      framePaths.length > 0 ? { photoRole: 'views' } : {},
+    );
     onLogLine(job, `composed prompt: ${intake.composedPrompt}`);
 
-    const result = await build(
+    const result = await buildEnvironment(
       { composedPrompt: intake.composedPrompt, images: intake.images },
       {
         setId: job.view.setId,
         displayName: job.view.name,
         deepVerify: true,
+        /* Stated rather than inferred. buildWorldPrompt turns reconstruction on
+           by itself above 4 images, so a 3-photo-plus-5-frame set would get it
+           and a 4-frame set would not — and the reason to reconstruct here is
+           what the images ARE, not how many of them there are. */
+        ...(framePaths.length > 0 ? { reconstructImages: true } : {}),
         // Read straight back out by lib/renders.ts: `name` becomes the row's
         // title and `description` its blurb, so the list needs no second store.
         provenance: {
@@ -459,8 +423,9 @@ async function run(job: Job, input: CreateRenderInput, build: EnvironmentBuilder
           blueprint: input.blueprint ? input.blueprint.name : null,
           blueprintSupplied: Boolean(input.blueprint),
           photos: input.photos.map((photo) => photo.name),
+          video: input.video ? input.video.name : null,
+          videoFrames: framePaths.length,
           createdVia: 'web-upload',
-          ...(job.view.mock ? { mock: true } : {}),
         },
         log: (line) => onLogLine(job, line),
         wait: { onPoll: (op, elapsedMs) => onPoll(job, op, elapsedMs) },
@@ -468,14 +433,12 @@ async function run(job: Job, input: CreateRenderInput, build: EnvironmentBuilder
       },
     );
 
-    await writeThumbnail(result.dir, input.photos[0]);
+    await writeThumbnail(result.dir, await stillFor(input, framePaths));
 
     job.view.phase = 'done';
     job.view.progress = 1;
     job.view.renderId = result.setId;
-    job.view.message = job.view.mock
-      ? 'Done (mock capture — the assets were copied, not generated).'
-      : 'Done.';
+    job.view.message = 'Done.';
     job.view.finishedAt = new Date().toISOString();
   } catch (error) {
     if (job.abort.signal.aborted) {
@@ -507,8 +470,49 @@ function describeError(error: unknown): NonNullable<JobView['error']> {
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/* the layout sentence                                                        */
+/* -------------------------------------------------------------------------- */
+
 /**
- * The first interior photo, as the capture's still.
+ * What the prompt says the layout is.
+ *
+ * The field is optional on the form and `composeIntake` will not proceed
+ * without a sentence — deliberately, since it refuses to invent a reading of a
+ * plan it cannot see. So an empty field is answered with where the layout
+ * genuinely came from rather than with a guess at rooms. It is a weaker prompt
+ * than a typed sentence, and it is meant to be: in that case the views are
+ * carrying the geometry and the text should not contradict them.
+ */
+function layoutSentence(input: CreateRenderInput): string {
+  const typed = input.description.trim();
+  if (typed) return typed;
+  return input.video
+    ? 'the one continuous interior walked through in these frames, in the order they were taken'
+    : 'the one continuous interior shown in these photographs';
+}
+
+/**
+ * A blueprint path `composeIntake` can stat.
+ *
+ * It requires one that exists — it never opens the file, but it refuses to
+ * account for a plan it cannot find. With no floor plan uploaded the layout
+ * really did come from the sentence, so the sentence is written to a file and
+ * named as the source: provenance then says "layout.txt", which is true, rather
+ * than pointing at a photo that is not a plan.
+ */
+async function writeLayoutSource(scratch: string, input: CreateRenderInput): Promise<string> {
+  const path = join(scratch, input.blueprint ? safeFileName(input.blueprint.name) : 'layout.txt');
+  await writeFile(path, input.blueprint ? input.blueprint.bytes : `${layoutSentence(input)}\n`);
+  return path;
+}
+
+/* -------------------------------------------------------------------------- */
+/* the still                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The capture's still.
  *
  * A copy rather than a resize: nothing in this project decodes an image, and a
  * generated capture with no picture on its row is far worse than one whose
@@ -526,242 +530,190 @@ async function writeThumbnail(dir: string, photo: IncomingFile | undefined): Pro
   }
 }
 
+/** The first photo, or a frame off the clip when the capture is video-only. */
+async function stillFor(
+  input: CreateRenderInput,
+  framePaths: string[],
+): Promise<IncomingFile | undefined> {
+  if (input.photos[0]) return input.photos[0];
+  const frame = framePaths[0];
+  if (!frame) return undefined;
+  try {
+    return { name: basename(frame), bytes: await readFile(frame) };
+  } catch {
+    return undefined;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
-/* the mock builder                                                           */
+/* video frames                                                               */
 /* -------------------------------------------------------------------------- */
+
+/** A swift compile plus one exact seek per frame, on a long 4K clip. */
+const EXTRACT_TIMEOUT_MS = 5 * 60_000;
+
+/** What the extractor prints per frame, and what it names the file. */
+const FRAME_LINE = /^frame-\d+\.jpg\s/;
+const FRAME_FILE = /^frame-\d+\.jpg$/;
 
 /**
- * Everything `buildEnvironment` does except spend money.
+ * Stage 0 for a walkthrough: a clip in, JPEGs on disk out.
  *
- * It stages through the same phases at roughly the same shape, emits the same
- * log lines and the same operation snapshots, and — crucially — leaves a real
- * capture on disk: room.spz, collider.glb and a scene.json in the exact format
- * lib/renders.ts parses, so the new render appears in the list and opens in
- * /plan like any other. The assets are copied from a capture that already
- * exists rather than synthesised, because a splat this code invented would load
- * as an empty room and prove nothing.
+ * The clip itself never reaches World Labs. A video media asset validates as an
+ * `image_prompt` and then fails the generation with a 500, so there is no video
+ * world-prompt to send; what there is, is multi-image reconstruction, and
+ * evenly spaced frames of one real walk are the input it was built for.
  *
- * The collider copy is run through the real `inspectGlb`, so a donor that is
- * broken fails here the same way a bad download would.
+ * How many frames: whatever is left of Marble's eight after the photos the user
+ * also attached (see `framesToExtract`, and MAX_PHOTOS_WITH_VIDEO for why the
+ * form guarantees at least four remain).
  */
-async function mockBuildEnvironment(
-  input: EnvironmentInput,
-  options: EnvironmentBuildOptions,
-): Promise<EnvironmentBuildResult> {
-  const log = options.log ?? (() => {});
-  const signal = options.signal;
-  const setId = options.setId ?? `mock-${Date.now()}`;
-  /* `outDir` is honoured by the real builder for the CLI's benefit; the mock
-     always writes where the app serves from, so the path stays a literal the
-     bundler can trace (see findDonorCapture). */
-  const dir = join(GENERATED_DIR, setId);
+async function videoFrames(
+  job: Job,
+  scratch: string,
+  video: IncomingFile,
+  photoCount: number,
+): Promise<string[]> {
+  enter(job, 'extracting');
+  const wanted = framesToExtract(photoCount);
+  job.view.message = `Extracting ${wanted} frames from the video…`;
 
-  log('MOCK BUILDER — no request will be sent to World Labs and nothing will be billed.');
+  const videoPath = join(scratch, safeFileName(video.name, 'walkthrough.mov'));
+  await writeFile(videoPath, video.bytes);
 
-  const donor = await findDonorCapture(setId);
-  if (!donor) {
+  const outDir = join(scratch, 'frames');
+  await mkdir(outDir, { recursive: true });
+
+  onLogLine(job, `extracting ${wanted} frames from ${basename(videoPath)}`);
+  await runExtractor(job, videoPath, outDir, wanted);
+
+  const written = (await readdir(outDir))
+    .filter((entry) => FRAME_FILE.test(entry))
+    .sort()
+    .map((entry) => join(outDir, entry));
+
+  /* The one outcome that must not be allowed to pass quietly. An extractor that
+     wrote nothing but exited 0 would otherwise leave a photo-only generation
+     that costs the same money and answers a question nobody asked. */
+  if (written.length === 0) {
     throw new MarbleError({
       kind: 'input',
-      message: 'The mock builder needs one existing capture to copy assets from.',
+      message: `No frames could be read from ${video.name}.`,
       hint:
-        'It looks for a folder under public/generated/ containing room.spz, ' +
-        'collider.glb and scene.json. Generate one for real, or unset MARBLE_MOCK.',
+        'The container opened but every seek failed, so the clip is probably ' +
+        'truncated or carries no video track. Re-export it as an MP4, or upload ' +
+        'photos instead.',
     });
   }
 
-  for (const image of input.images) {
-    const bytes = (await stat(image)).size;
-    log(`uploading ${basename(image)} (${bytes} bytes)`);
-    await pause(350, signal);
-  }
-
-  log(
-    `starting multi-image generation with ${input.images.length} photo(s) on ` +
-      `${options.model ?? DEFAULT_MODEL}`,
-  );
-  const operationId = `mock-op-${randomUUID().slice(0, 8)}`;
-  log(`operation ${operationId}`);
-
-  const startedAt = Date.now();
-  for (const stage of MOCK_STAGES) {
-    await pause(1_100, signal);
-    const elapsed = Date.now() - startedAt;
-    options.wait?.onPoll?.(mockOperation(operationId, stage), elapsed);
-    log(`  ${Math.round(elapsed / 1000)}s  RUNNING - ${stage}`);
-  }
-
-  await mkdir(dir, { recursive: true });
-  log(`writing to ${relative(process.cwd(), dir) || dir}`);
-
-  const collider = await copyWithProgress(donor, dir, 'collider.glb', log, signal);
-  const inspection = inspectGlb(await readFile(join(dir, 'collider.glb')));
-  log(`  collider: ${inspection.meshCount} mesh(es), ${inspection.primitiveCount} primitive(s)`);
-
-  const splat = await copyWithProgress(donor, dir, 'room.spz', log, signal);
-
-  /* scene.json is written inline by lib/marble/build.ts, so there is no shared
-     writer to call. Patching the donor's own file instead of hand-rolling a
-     second copy of that shape means the mock cannot drift out of step with the
-     format the real builder emits — whatever build.ts adds, the donor has. */
-  const scene = JSON.parse(await readFile(join(donor, 'scene.json'), 'utf8')) as Record<
-    string,
-    unknown
-  >;
-  const donorFiles = (scene.files ?? {}) as Record<string, unknown>;
-  const donorSplat = (donorFiles.splat ?? {}) as Record<string, unknown>;
-  const donorCollider = (donorFiles.collider ?? {}) as Record<string, unknown>;
-  const placement = readPlacement(scene.splatTransform);
-
-  const scenePath = join(dir, 'scene.json');
-  await writeFile(
-    scenePath,
-    `${JSON.stringify(
-      {
-        ...scene,
-        source: 'mock',
-        generator: 'app/api/renders/jobs.ts (mockBuildEnvironment)',
-        generatedAt: new Date().toISOString(),
-        mock: {
-          note: 'No Marble generation happened. Geometry copied from another capture.',
-          copiedFrom: basename(donor),
-        },
-        world: { id: `mock-world-${setId}`, marbleUrl: null, model: null, caption: null, operationId },
-        prompt: input.composedPrompt,
-        provenance: options.provenance ?? null,
-        files: {
-          ...donorFiles,
-          splat: { ...donorSplat, file: 'room.spz', url: null, bytes: splat },
-          collider: {
-            ...donorCollider,
-            file: 'collider.glb',
-            url: null,
-            bytes: collider,
-            meshes: inspection.meshCount,
-            primitives: inspection.primitiveCount,
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    'utf8',
-  );
-
-  return {
-    setId,
-    dir,
-    operationId,
-    worldId: `mock-world-${setId}`,
-    worldMarbleUrl: null,
-    model: options.model ?? DEFAULT_MODEL,
-    caption: null,
-    splat: {
-      file: 'room.spz',
-      url: '',
-      bytes: splat,
-      sha256: '',
-      spzKey: typeof donorSplat.spzKey === 'string' ? donorSplat.spzKey : '500k',
-    },
-    extraSplats: [],
-    collider: { file: 'collider.glb', url: '', bytes: collider, sha256: '', inspection, loader: null },
-    semantics: null,
-    placement,
-    scenePath,
-  };
-}
-
-/** Status descriptions in the shape Marble's operation metadata carries them. */
-const MOCK_STAGES = [
-  'preparing inputs',
-  'reconstructing geometry',
-  'training gaussians',
-  'baking collider mesh',
-  'packaging assets',
-] as const;
-
-function mockOperation(operationId: string, description: string): MarbleOperation {
-  return {
-    operation_id: operationId,
-    done: false,
-    metadata: { progress: { status: 'RUNNING', description } },
-  };
-}
-
-function readPlacement(value: unknown): EnvironmentBuildResult['placement'] {
-  const record = (value ?? {}) as Record<string, unknown>;
-  const vec = (v: unknown): [number, number, number] =>
-    Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number')
-      ? [v[0] as number, v[1] as number, v[2] as number]
-      : [0, 0, 0];
-  return {
-    position: vec(record.position),
-    rotation: vec(record.rotation),
-    scale: typeof record.scale === 'number' ? record.scale : 1,
-  };
+  onLogLine(job, `extracted ${written.length} frame(s)`);
+  return written;
 }
 
 /**
- * A finished capture to lift geometry from. Never the folder being written.
+ * `swift scripts/video-frames.swift`, as a child process.
  *
- * Every path is rebuilt from the same `process.cwd()/public/generated` literal
- * rather than taken as a parameter. Turbopack resolves filesystem access
- * statically at build time, and a root it cannot see through makes it trace the
- * entire project into the server bundle — which on this repo means the splats
- * and colliders under public/, hundreds of megabytes of them.
+ * AVFoundation rather than a decoder in this process, because it is already on
+ * every Mac and a phone video should not need ffmpeg installed first. The price
+ * is a child process, and every way one can fail — no toolchain, an unreadable
+ * container, a seek that throws, a hang — is turned into a MarbleError here so
+ * that it surfaces on the job the same way a rejected upload does.
  */
-async function findDonorCapture(excludeId: string): Promise<string | null> {
-  let entries: string[];
-  try {
-    entries = (await readdir(join(process.cwd(), 'public', 'generated'), { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && entry.name !== excludeId)
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return null;
-  }
-  for (const entry of entries) {
-    const complete = await Promise.all(
-      ['room.spz', 'collider.glb', 'scene.json'].map((file) =>
-        exists(join(process.cwd(), 'public', 'generated', entry, file)),
-      ),
-    );
-    if (complete.every(Boolean)) return join(process.cwd(), 'public', 'generated', entry);
-  }
-  return null;
-}
+function runExtractor(job: Job, video: string, outDir: string, count: number): Promise<void> {
+  const script = resolve(process.cwd(), 'scripts', 'video-frames.swift');
 
-/** Copy one asset, narrating it the way `fetchVerified` narrates a download. */
-async function copyWithProgress(
-  donor: string,
-  dir: string,
-  file: string,
-  log: (line: string) => void,
-  signal: AbortSignal | undefined,
-): Promise<number> {
-  await copyFile(join(donor, file), join(dir, file));
-  const bytes = (await stat(join(dir, file))).size;
-  for (const percent of [20, 50, 80, 100]) {
-    await pause(220, signal);
-    log(`  ${file} ${percent}%`);
-  }
-  log(`  ${file} ${bytes} bytes  sha256 mock`);
-  return bytes;
-}
+  return new Promise((settle, reject) => {
+    const child = spawn('swift', [script, video, outDir, String(count)], {
+      signal: job.abort.signal,
+      timeout: EXTRACT_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolvePause, reject) => {
-    if (signal?.aborted) {
-      reject(new MarbleError({ kind: 'timeout', message: 'Aborted.' }));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolvePause();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new MarbleError({ kind: 'timeout', message: 'Aborted.' }));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
+    let pending = '';
+    let stderr = '';
+    let done = 0;
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      // One line per completed seek is the only progress a one-shot child
+      // process gives us, so the bar is driven off the lines as they arrive
+      // rather than off the exit code.
+      pending += chunk;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!FRAME_LINE.test(line)) continue;
+        done += 1;
+        onLogLine(job, `  ${line.trim()}`);
+        job.view.message = `Extracting frames from the video — ${done} of ${count}`;
+        advance(
+          job,
+          PHASE_FLOOR.extracting +
+            (PHASE_FLOOR.uploading - PHASE_FLOOR.extracting) * (done / count),
+        );
+      }
+    });
+
+    child.stderr.setEncoding('utf8');
+    /* Tail only. `swift <file>` compiles before it runs and prints a deprecation
+       block for the AVFoundation calls every single time — on a success too —
+       so the buffer is mostly noise, and the sentence that explains a failure is
+       whatever the script printed last. */
+    child.stderr.on('data', (chunk: string) => {
+      stderr = `${stderr}${chunk}`.slice(-4_000);
+    });
+
+    child.on('error', (cause: NodeJS.ErrnoException) => {
+      if (job.abort.signal.aborted) {
+        reject(cause);
+        return;
+      }
+      reject(
+        cause.code === 'ENOENT'
+          ? new MarbleError({
+              kind: 'input',
+              message: 'Frame extraction needs Swift, and `swift` is not on this machine.',
+              hint:
+                'Install the Xcode command line tools with `xcode-select --install`, ' +
+                'or upload photos instead of a video.',
+              cause,
+            })
+          : new MarbleError({
+              kind: 'input',
+              message: `Frame extraction could not start: ${cause.message}`,
+              cause,
+            }),
+      );
+    });
+
+    child.on('close', (code, signal) => {
+      if (job.abort.signal.aborted) {
+        reject(new MarbleError({ kind: 'timeout', message: 'Aborted.' }));
+        return;
+      }
+      if (code === 0) {
+        settle();
+        return;
+      }
+      reject(
+        new MarbleError({
+          kind: 'input',
+          message: signal
+            ? `Frame extraction was stopped after ${Math.round(EXTRACT_TIMEOUT_MS / 1000)}s (${signal}).`
+            : `Frame extraction failed reading ${basename(video)} (exit ${code}).`,
+          hint: lastLines(stderr, 3) || 'The extractor printed nothing to explain it.',
+        }),
+      );
+    });
   });
+}
+
+/** The end of a stderr buffer, which is where the reason for an exit lands. */
+function lastLines(text: string, count: number): string {
+  return text
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .slice(-count)
+    .join('\n');
 }

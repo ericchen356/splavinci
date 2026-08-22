@@ -307,9 +307,27 @@ function dimension(c, dim) {
   return parts.join('');
 }
 
+/**
+ * How many metres the scale bar shows.
+ *
+ * Five, unless the sheet is too narrow to fit the legend beside a five-metre
+ * bar - which a 5.4 m frontage drawn at 88 px/m is. Shortening the bar is the
+ * cheap fix; the alternative is stacking the legend under it and growing the
+ * bottom margin, which moves the title block on every existing plan.
+ */
+function scaleMetres(c) {
+  // Legend block measured from the end of the bar: 56 px gap, three items on a
+  // 92 px pitch, and roughly 60 px for the last swatch and its label.
+  const legendWidth = 56 + 2 * 92 + 90;
+  for (const metres of [5, 4, 3, 2]) {
+    if (MARGIN.left + metres * PPM + legendWidth + 24 <= c.width) return metres;
+  }
+  return 2;
+}
+
 /** Alternating 1 m blocks. The one element that makes the drawing measurable. */
 function scaleBar(c, plan) {
-  const metres = 5;
+  const metres = scaleMetres(c);
   const x0 = MARGIN.left;
   const y0 = MARGIN.top + plan.size[1] * PPM + 176;
   const h = 11;
@@ -379,7 +397,7 @@ function titleBlock(c, plan) {
 }
 
 function legend(c, plan) {
-  const x = MARGIN.left + 5 * PPM + 56;
+  const x = MARGIN.left + scaleMetres(c) * PPM + 56;
   const y = MARGIN.top + plan.size[1] * PPM + 176;
   const items = [
     ['Wall', `<rect x="0" y="2" width="22" height="8" fill="${INK.poche}"/>`],

@@ -1,0 +1,34 @@
+{
+  "id": "kiln-terrace",
+  "name": "Kiln Terrace",
+  "description": "Victorian end-of-terrace ground floor, one hallway running front to back.",
+  "blueprint": {
+    "path": "blueprint.png",
+    "layoutDescription": "the ground floor of a Victorian end-of-terrace house, 5.4 metres wide and 14 metres deep, laid out as one hallway running the full depth down the west side with every room opening off its east side. A porch at the north-west corner holds the front door, which opens into the hallway. The hallway is a long narrow corridor about 2 metres wide running north to south the whole depth of the house, with a staircase rising along its east side about halfway down and a small WC tucked beneath the turn of that stair. The front parlour is the north-east room, about 14.4 square metres, entered by a door from the hallway; it has a square bay window with three sash windows looking north onto the street and two tall sash windows in its east wall, and a pair of double doors in its south wall connecting it to the dining room. The dining room sits directly behind the parlour in the middle of the east side, about 11.1 square metres, with chimney breasts projecting from its east flank wall, two sash windows in that east wall, a door west into the hallway, and the double doors north into the parlour. South of the dining room are two small service rooms side by side: the WC, about 2.2 square metres, on the west against the stair, with a basin and a lavatory; and the larder, about 2.2 square metres, on the east, lined with shelves and with a small window in the east wall. The kitchen occupies the whole southern end of the house, about 14.9 square metres and running the full 5.4 metre width, entered from the foot of the hallway and also from the larder; it has a run of counter along its east wall with a sink and a four-ring hob, a dresser against the west wall, a table with four chairs in the middle, a window in the east wall, a window in the south wall and a back door in the south wall opening to the garden. The floor is continuous throughout, every wall runs the full 2.9 metres from floor to ceiling, and the ceiling covers every room including the hallway",
+    "note": "Prose is exhaustive on purpose: an earlier scene's shower room was never described and Marble simply did not build it. Every room here is named, sized, placed, connected and furnished."
+  },
+  "envelope": { "widthM": 5.4, "depthM": 14.0, "ceilingM": 2.9 },
+  "photos": [
+    "photos/bright-room.jpg",
+    "photos/dining.jpg",
+    "photos/parlour.jpg"
+  ],
+  "keywords": [
+    "61 square metre Victorian terrace ground floor with 2.9 metre ceilings",
+    "stripped pine floorboards, pale plaster walls, deep skirting and picture rails",
+    "tall sash windows with working shutters, warm raking afternoon light",
+    "cast iron fireplaces with tiled slips, painted panelled doors with brass furniture",
+    "worn leather armchair, dark timber dresser, open shelving, enamel and brass fittings",
+    "lived-in, period, quietly warm"
+  ],
+  "anchor": "Interior of a home, photographed at standing eye level",
+  "generation": {
+    "model": "marble-1.1",
+    "spz": "full_res",
+    "tags": ["splavinci", "sample-scene", "kiln-terrace"]
+  },
+  "provenance": {
+    "plan": "scripts/make-blueprint.mjs, scene kiln-terrace",
+    "photoCredits": "samples/kiln-terrace/README.md"
+  }
+}

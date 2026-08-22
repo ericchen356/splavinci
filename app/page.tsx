@@ -10,10 +10,10 @@
  *      discarded the waypoints you had just placed; choosing a room is a
  *      library act, so it happens before you are in the editor. Each row is a
  *      link to /plan?capture=<id> and nothing else.
- *   2. MAKE ONE. Photos, an optional floor plan, and a sentence about the
- *      layout go to /api/renders, which runs the same two-stage Marble pipeline
- *      the CLI runs. That takes minutes, so the POST only starts a job and this
- *      screen polls it.
+ *   2. MAKE ONE. Photos and/or a walkthrough video, an optional floor plan and
+ *      an optional sentence about the layout go to /api/renders, which runs the
+ *      same two-stage Marble pipeline the CLI runs. That takes minutes, so the
+ *      POST only starts a job and this screen polls it.
  *
  * A client component in one file on purpose. Server-rendering the list would
  * save a frame of skeleton, but it would need a second file for the interactive
@@ -31,7 +31,7 @@ import type { FieldError } from './api/renders/limits';
 import type { JobView } from './api/renders/jobs';
 import {
   ACCEPT_ATTRIBUTE,
-  MAX_PHOTOS,
+  VIDEO_ACCEPT_ATTRIBUTE,
   formatBytes,
   validateUpload,
 } from './api/renders/limits';
@@ -54,7 +54,6 @@ function isTerminal(phase: JobView['phase']): boolean {
 export default function Home() {
   const [renders, setRenders] = useState<RenderSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [mockOnly, setMockOnly] = useState(false);
   const [creating, setCreating] = useState(false);
   const [job, setJob] = useState<JobView | null>(null);
   /** The capture this session just made, so it is findable in a long list. */
@@ -64,14 +63,13 @@ export default function Home() {
     try {
       const response = await fetch('/api/renders', { cache: 'no-store' });
       if (!response.ok) throw new Error(`the render list returned ${response.status}`);
-      const body = (await response.json()) as { renders: RenderSummary[]; mockOnly?: boolean };
+      const body = (await response.json()) as { renders: RenderSummary[] };
       // Without this, /plan?capture=<id> resolves an id it has never heard of
       // and quietly opens the default room instead. Client-side navigation
       // keeps this module alive, so registering here is enough for the links
       // below; a cold load straight into /plan is not covered.
       registerAssetSets(body.renders.map((row) => row.assetSet));
       setRenders(body.renders);
-      setMockOnly(Boolean(body.mockOnly));
       setListError(null);
     } catch (error) {
       setListError(error instanceof Error ? error.message : String(error));
@@ -157,7 +155,7 @@ export default function Home() {
           <h1 className="home__title">splavinci</h1>
           <p className="home__lede">
             Author a camera flythrough through a captured room. Pick a capture to plan a
-            path in it, or build a new one from photos.
+            path in it, or build a new one from photos or a walkthrough video.
           </p>
         </div>
         <button
@@ -175,7 +173,7 @@ export default function Home() {
 
       {job && <JobPanel job={job} onCancel={cancelJob} onDismiss={() => setJob(null)} />}
 
-      {showForm && <CreateForm mockOnly={mockOnly} onStarted={startJob} />}
+      {showForm && <CreateForm onStarted={startJob} />}
 
       <RenderList
         renders={renders}
@@ -231,7 +229,8 @@ function RenderList({
         <button type="button" className="home-empty" onClick={onCreate}>
           <span className="home-empty__title">No captures yet</span>
           <span className="home-empty__body">
-            Build one from a handful of interior photos and a sentence about the layout.
+            Build one from a handful of interior photos, or from a video of a walk
+            through the space.
           </span>
         </button>
       ) : (
@@ -305,7 +304,8 @@ function compactCount(value: number): string {
 const PHASE_LABEL: Record<JobView['phase'], string> = {
   queued: 'Queued',
   intake: 'Composing the prompt',
-  uploading: 'Uploading photos',
+  extracting: 'Extracting frames',
+  uploading: 'Uploading images',
   generating: 'Generating the world',
   downloading: 'Downloading assets',
   done: 'Ready',
@@ -333,7 +333,6 @@ function JobPanel({
         </h2>
         <span className="home-card__meta">
           {PHASE_LABEL[job.phase]} · {formatElapsed(job.elapsedMs)}
-          {job.mock && ' · mock builder'}
         </span>
       </div>
 
@@ -408,29 +407,20 @@ function formatElapsed(ms: number): string {
 /* the upload form                                                            */
 /* ========================================================================== */
 
-function CreateForm({
-  mockOnly,
-  onStarted,
-}: {
-  mockOnly: boolean;
-  onStarted: (job: JobView) => void;
-}) {
+function CreateForm({ onStarted }: { onStarted: (job: JobView) => void }) {
   const [photos, setPhotos] = useState<File[]>([]);
+  const [video, setVideo] = useState<File | null>(null);
   const [blueprint, setBlueprint] = useState<File | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [keywords, setKeywords] = useState('');
-  /* Defaults on outside production. A Marble generation is billed per world, so
-     the safe default for a development machine is the one that costs nothing;
-     the checkbox says exactly what it does. */
-  const [useMock, setUseMock] = useState(process.env.NODE_ENV !== 'production');
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const errors = useMemo(
-    () => validateUpload({ photos, blueprint, description, keywords, name }),
-    [photos, blueprint, description, keywords, name],
+    () => validateUpload({ photos, video, blueprint, description, keywords, name }),
+    [photos, video, blueprint, description, keywords, name],
   );
   const errorFor = (field: Field): string | null =>
     touched[field] ? (errors.find((error) => error.field === field)?.message ?? null) : null;
@@ -439,7 +429,7 @@ function CreateForm({
     setTouched((was) => ({ ...was, photos: true }));
     setPhotos((current) => {
       // Same file dropped twice is a slip, not an instruction; Marble counts it
-      // against an 8-photo cap either way.
+      // against an 8-image cap either way.
       const seen = new Set(current.map(fileKey));
       return [...current, ...files.filter((file) => !seen.has(fileKey(file)))];
     });
@@ -447,7 +437,14 @@ function CreateForm({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setTouched({ photos: true, blueprint: true, description: true, keywords: true, name: true });
+    setTouched({
+      photos: true,
+      video: true,
+      blueprint: true,
+      description: true,
+      keywords: true,
+      name: true,
+    });
     setSubmitError(null);
     if (errors.length > 0) return;
 
@@ -455,11 +452,11 @@ function CreateForm({
     try {
       const body = new FormData();
       for (const photo of photos) body.append('photos', photo);
+      if (video) body.append('video', video);
       if (blueprint) body.append('blueprint', blueprint);
       body.set('name', name);
       body.set('description', description);
       body.set('keywords', keywords);
-      if (useMock) body.set('mock', '1');
 
       const response = await fetch('/api/renders', { method: 'POST', body });
       const payload = (await response.json()) as { job?: JobView; errors?: FieldError[] };
@@ -478,7 +475,18 @@ function CreateForm({
     }
   };
 
-  const totalBytes = photos.reduce((sum, file) => sum + file.size, 0) + (blueprint?.size ?? 0);
+  const totalBytes =
+    photos.reduce((sum, file) => sum + file.size, 0) + (blueprint?.size ?? 0) + (video?.size ?? 0);
+  // Only what is actually attached. "0 photos" beside a 60 MB video was the
+  // form counting a thing the user had chosen not to give it.
+  const summary = [
+    photos.length > 0 ? `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'}` : null,
+    video ? 'video' : null,
+    blueprint ? 'floor plan' : null,
+    totalBytes > 0 ? formatBytes(totalBytes) : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' · ');
 
   return (
     <form className="home-card" onSubmit={submit} noValidate aria-labelledby="create-heading">
@@ -486,17 +494,16 @@ function CreateForm({
         <h2 className="home-card__title" id="create-heading">
           New render
         </h2>
-        <span className="home-card__meta">
-          {photos.length} {photos.length === 1 ? 'photo' : 'photos'}
-          {blueprint && ' · blueprint'}
-          {totalBytes > 0 && ` · ${formatBytes(totalBytes)}`}
-        </span>
+        <span className="home-card__meta">{summary || 'nothing added yet'}</span>
       </div>
 
-      <Step n={1} title="Interior photos" hint={`Up to ${MAX_PHOTOS}. Passed to Marble untouched — nothing here re-encodes them.`}>
+      {/* One step, because it is one requirement: either half satisfies it, and
+          splitting them into steps 1 and 2 would read as "do both". */}
+      <Step n={1} title="Photos or video">
         <DropZone
           label="Drop photos here, or choose files"
           sublabel="JPG, PNG or WebP"
+          accept={ACCEPT_ATTRIBUTE}
           multiple
           invalid={Boolean(errorFor('photos'))}
           error={errorFor('photos')}
@@ -516,20 +523,39 @@ function CreateForm({
             ))}
           </ul>
         )}
+
+        {/* Two stacked dropzones read as "fill in both". This is the only thing
+            on the step that says they are alternatives. */}
+        <span className="home-or" aria-hidden="true">
+          or
+        </span>
+
+        {video ? (
+          <FileTile file={video} onRemove={() => setVideo(null)} />
+        ) : (
+          <DropZone
+            label="Drop a walkthrough video, or choose a file"
+            sublabel="MOV, MP4 or M4V"
+            accept={VIDEO_ACCEPT_ATTRIBUTE}
+            invalid={Boolean(errorFor('video'))}
+            error={errorFor('video')}
+            compact
+            onFiles={(files) => {
+              setTouched((was) => ({ ...was, video: true }));
+              setVideo(files[0] ?? null);
+            }}
+          />
+        )}
       </Step>
 
-      <Step
-        n={2}
-        title="Floor plan"
-        optional
-        hint="Never parsed — it is kept for provenance. The sentence in step 3 is what describes the layout."
-      >
+      <Step n={2} title="Floor plan" optional>
         {blueprint ? (
           <FileTile file={blueprint} onRemove={() => setBlueprint(null)} />
         ) : (
           <DropZone
             label="Drop a floor plan, or choose a file"
-            sublabel="Optional"
+            sublabel="JPG, PNG or WebP"
+            accept={ACCEPT_ATTRIBUTE}
             invalid={Boolean(errorFor('blueprint'))}
             error={errorFor('blueprint')}
             compact
@@ -541,10 +567,11 @@ function CreateForm({
         )}
       </Step>
 
-      <Step n={3} title="Describe the space" hint="Folded into one prompt by the intake stage.">
+      <Step n={3} title="Describe the space" optional>
         <Field
           label="Layout"
           hint="Room count and what leads to what."
+          optional
           error={errorFor('description')}
           onBlur={() => setTouched((was) => ({ ...was, description: true }))}
         >
@@ -611,24 +638,11 @@ function CreateForm({
           {submitting ? 'Starting…' : 'Create render'}
         </button>
 
-        {mockOnly ? (
-          <p className="home-cost" id="create-cost">
-            This server runs with <code>MARBLE_MOCK</code> set — no request reaches World
-            Labs and nothing is billed.
-          </p>
-        ) : (
-          <label className="home-check">
-            <input
-              type="checkbox"
-              checked={useMock}
-              onChange={(event) => setUseMock(event.target.checked)}
-            />
-            <span id="create-cost">
-              Mock build — copy an existing capture instead of calling Marble.{' '}
-              <span className="home-cost">A real build spends World Labs credits.</span>
-            </span>
-          </label>
-        )}
+        {/* Not a caption about the machinery — the one consequence of pressing
+            the button that is not visible on the screen. */}
+        <p className="home-cost" id="create-cost">
+          Every build runs a real Marble generation and spends World Labs credits.
+        </p>
       </div>
 
       {submitError && (
@@ -636,7 +650,7 @@ function CreateForm({
           <Icon name="error" /> {submitError}
         </p>
       )}
-      {touched.photos && errors.length > 0 && (
+      {(touched.photos || touched.video) && errors.length > 0 && (
         <p className="home-note" data-tone="warn" role="status">
           <Icon name="alert" /> {errors.length} {errors.length === 1 ? 'field needs' : 'fields need'} attention
           before this can start.
@@ -655,16 +669,17 @@ function fileKey(file: File): string {
 /* form parts                                                                 */
 /* ========================================================================== */
 
+/* A numbered step. No slot for a caption beside the title: the ones that were
+   there explained how the pipeline works, which is not a thing anyone filling
+   in this form needs to know. What the field accepts stays, on the control. */
 function Step({
   n,
   title,
-  hint,
   optional,
   children,
 }: {
   n: number;
   title: string;
-  hint?: string;
   optional?: boolean;
   children: React.ReactNode;
 }) {
@@ -678,7 +693,6 @@ function Step({
           {title}
           {optional && <span className="home-step__optional">optional</span>}
         </span>
-        {hint && <span className="home-step__hint">{hint}</span>}
       </div>
       <div className="home-step__body">{children}</div>
     </section>
@@ -696,6 +710,7 @@ function Step({
 function DropZone({
   label,
   sublabel,
+  accept,
   multiple,
   compact,
   invalid,
@@ -704,6 +719,8 @@ function DropZone({
 }: {
   label: string;
   sublabel?: string;
+  /** Filters the picker only. A drop bypasses it, so `validateUpload` is the check. */
+  accept: string;
   multiple?: boolean;
   compact?: boolean;
   invalid?: boolean;
@@ -752,7 +769,7 @@ function DropZone({
           id={inputId}
           className="visually-hidden"
           type="file"
-          accept={ACCEPT_ATTRIBUTE}
+          accept={accept}
           multiple={multiple}
           aria-labelledby={labelId}
           aria-invalid={invalid || undefined}
