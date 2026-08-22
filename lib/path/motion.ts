@@ -144,8 +144,17 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
       const roomFor = ctx.clearance !== undefined
         ? Math.max(AMPLITUDE.minTargetRadius * 0.5, ctx.clearance * 0.85)
         : AMPLITUDE.maxOrbitRadius;
+      // Radius answers to move size, arc answers to the dial. Those are the
+      // two things an orbit genuinely has, and until now the slider drove
+      // neither of them - it was measurably inert for this shot at every
+      // setting, because arc had been handed to the dial and radius was never
+      // scaled by anything the user could reach.
+      const natural = Math.max(
+        hasTarget ? toTarget.length() : 0,
+        AMPLITUDE.minTargetRadius * 0.5,
+      );
       const orbitRadius = Math.min(
-        Math.max(hasTarget ? toTarget.length() : 0, AMPLITUDE.minTargetRadius * 0.5),
+        natural * Math.max(0.15, k),
         AMPLITUDE.maxOrbitRadius,
         roomFor,
       ) * (fit < 1 ? fit : 1);
