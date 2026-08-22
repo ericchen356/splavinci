@@ -53,6 +53,8 @@ export type GenerateOptions = {
   cameraHeight: number;
   /** Camera body radius; gates pathfinding and shot validation. */
   radius: number;
+  /** Ceiling on how fast the view may rotate. A brisk whip pan, not a cut. */
+  maxTurnRateDegPerSec: number;
   grid?: GridOptions;
 };
 
@@ -60,6 +62,7 @@ export const DEFAULT_GENERATE: GenerateOptions = {
   fps: 30,
   cameraHeight: DEFAULT_CURVE.cameraHeight,
   radius: DEFAULT_CURVE.radius,
+  maxTurnRateDegPerSec: 200,
 };
 
 export type PathInput = {
@@ -245,30 +248,48 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     time += duration;
   };
 
+  // A waypoint's stored position is a point on the FLOOR (that is what a
+  // mini-map click means), so the camera anchor is lifted to eye height.
+  // Without this the camera would sink to the floor at every waypoint and pop
+  // back up for each travel leg.
+  const anchorOf = (wp: Waypoint) =>
+    new THREE.Vector3(
+      wp.position[0],
+      cameraYAt(grid, wp.position, opts.cameraHeight, fallbackFloorY),
+      wp.position[2],
+    );
+
+  // Memoised: a travel leg needs the NEXT waypoint's opening pose to stay
+  // continuous with it, so each shot is asked for twice and fitting it is the
+  // expensive part.
+  const fittedShots = new Map<number, FittedShot>();
+  const shotContextFor = (index: number): FittedShot | null => {
+    if (index < 0 || index >= waypoints.length) return null;
+    const cached = fittedShots.get(index);
+    if (cached) return cached;
+    const wp = waypoints[index];
+    const intent = shots[index];
+    const ctx: ShotContext = {
+      anchor: anchorOf(wp),
+      target: new THREE.Vector3(...intent.targetPoint),
+      tangent: tangents[index],
+      intensity: intent.intensity,
+      // A waypoint whose target resolved to its own column has nothing to
+      // frame; the shot falls back to its direction of travel.
+      hasTarget: intent.targetDistance > 1e-6,
+    };
+    const fitted = fitShotToRoom(grid, intent.shotType, ctx, opts.radius);
+    fittedShots.set(index, fitted);
+    return fitted;
+  };
+
   for (let i = 0; i < waypoints.length; i++) {
     const w = waypoints[i];
     const shot = shots[i];
 
     /* shot at waypoint i */
-    // A waypoint's stored position is a point on the FLOOR (that is what a
-    // mini-map click means), so the camera anchor is lifted to eye height here.
-    // Without this the camera would sink to the floor at every waypoint and pop
-    // back up for each travel leg.
-    const anchor = new THREE.Vector3(
-      w.position[0],
-      cameraYAt(grid, w.position, opts.cameraHeight, fallbackFloorY),
-      w.position[2],
-    );
-    const target = new THREE.Vector3(...shot.targetPoint);
-    const baseCtx: ShotContext = {
-      anchor, target, tangent: tangents[i],
-      intensity: shot.intensity,
-      // A waypoint whose target resolved to its own column has nothing to
-      // frame; the shot falls back to its direction of travel.
-      hasTarget: shot.targetDistance > 1e-6,
-    };
-
-    const validated = fitShotToRoom(grid, shot.shotType, baseCtx, opts.radius);
+    const validated = shotContextFor(i)!;
+    const anchor = validated.ctx.anchor;
     if (validated.degraded) {
       warnings.push({
         code: 'shot-clipped', severity: 'warning', waypointIds: [w.id],
@@ -295,26 +316,103 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     if (i < waypoints.length - 1 && leg) {
       polyline.push(...leg.polyline);
       const nextShot = shots[i + 1];
-      const fromLook = new THREE.Vector3(...shot.targetPoint);
-      const toLook = new THREE.Vector3(...nextShot.targetPoint);
+      const nextWaypoint = waypoints[i + 1];
+
+      // The poses the neighbouring shots actually END and BEGIN at.
+      //
+      // A shot is a displacement about its anchor and does not return to it:
+      // push-in finishes advanced toward its subject, rise finishes 1.4 m
+      // higher, orbit finishes part-way round an arc. The travel leg used to
+      // start unconditionally at the A* curve's first point, so the camera
+      // teleported between the two - measured at up to 2.99 m in a single
+      // frame, about 90 m/s, against a typical step of 0.0013 m.
+      const exitPose = sampleShot(validated.shotType, validated.ctx, 1);
+      const nextCtx = shotContextFor(i + 1);
+      const entryPose = nextCtx
+        ? sampleShot(nextCtx.shotType, nextCtx.ctx, 0)
+        : { position: anchorOf(nextWaypoint), lookAt: new THREE.Vector3(...nextShot.targetPoint) };
+
+      const curveStart = leg.curve ? leg.curve.getPointAt(0) : exitPose.position.clone();
+      const curveEnd = leg.curve ? leg.curve.getPointAt(1) : entryPose.position.clone();
+      // Offsets that reconcile the curve's endpoints with the shot poses, faded
+      // out over the first and last fifth of the leg so the middle still flies
+      // the routed path exactly.
+      const startOffset = exitPose.position.clone().sub(curveStart);
+      const endOffset = entryPose.position.clone().sub(curveEnd);
+
+      const fromLook = exitPose.lookAt.clone();
+      const toLook = entryPose.lookAt.clone();
+      const blendSpan = blendFractionFor(leg.duration);
+      // Lead expressed in curve parameter, since getPointAt is arc-length
+      // based: a constant metre lead behaves the same on a long leg and a short
+      // one, where a constant parameter lead would not.
+      const lookAheadU = leg.length > 1e-6
+        ? Math.min(0.5, LOOK_AHEAD_DISTANCE / leg.length)
+        : 0.5;
+      const endTangent = leg.curve
+        ? leg.curve.getTangentAt(1)
+        : new THREE.Vector3(0, 0, 1);
 
       if (leg.warnings.length > 0) warnings.push(...leg.warnings);
 
       pushSegment(
-        'travel', `travel:${w.id}->${waypoints[i + 1].id}`,
-        waypoints[i + 1].id, w.id, waypoints[i + 1].id,
+        'travel', `travel:${w.id}->${nextWaypoint.id}`,
+        nextWaypoint.id, w.id, nextWaypoint.id,
         leg.duration,
         (t) => {
           const e = easeInOut(t);
-          const p = leg.curve ? leg.curve.getPointAt(clamp01(e)) : anchor.clone();
-          // Look target eases from what we were framing to what comes next; a
-          // hard cut at the waypoint boundary reads as a glitch.
-          const look = fromLook.clone().lerp(toLook, e);
-          if (!leg.hasLookTargets && leg.curve) {
-            // Nothing to frame at either end: look where we are going.
-            const ahead = leg.curve.getPointAt(clamp01(Math.min(1, e + 0.06)));
-            look.copy(ahead);
+          if (!leg.curve) {
+            // Degenerate leg: hold the exit pose rather than inventing motion.
+            return { position: vec3(exitPose.position), lookAt: vec3(exitPose.lookAt) };
           }
+          const base = leg.curve.getPointAt(clamp01(e));
+          const p = base.clone()
+            .addScaledVector(startOffset, blendOut(e, blendSpan))
+            .addScaledVector(endOffset, blendOut(1 - e, blendSpan));
+
+          // While travelling, face along the direction of travel.
+          //
+          // Interpolating between the two shots' framing instead looked
+          // reasonable and was not: the auto rule resolves most waypoints to
+          // the room's centre, so the camera fixed on one point and moonwalked
+          // through the leg once it passed it - 198 of 198 frames on one
+          // segment more than 90 degrees off its own direction of motion. A
+          // travelling camera looks where it is going; the shots at either end
+          // are what frame a subject.
+          // Aim at a point a fixed distance further along the route, not at
+          // the instantaneous tangent. The tangent whips through a corner -
+          // measured at 68 degrees in a single frame rounding the nook - while
+          // a point held ahead averages the turn over its own lead distance
+          // and sweeps through it the way an operator would.
+          //
+          // Past the end of the curve the aim point is EXTRAPOLATED along the
+          // exit tangent rather than clamped. Clamping parks it on the final
+          // point, the camera closes on it, and the look direction becomes
+          // unstable and then flips - 156 degrees in one frame. Switching to a
+          // different aim rule near the end is no better: changing rule mid
+          // flight is itself the discontinuity.
+          const u = e + lookAheadU;
+          const aheadPoint = u <= 1
+            ? leg.curve.getPointAt(u)
+            : curveEnd.clone().addScaledVector(endTangent, (u - 1) * leg.length);
+
+          // Blend look DIRECTIONS, never look points.
+          //
+          // Interpolating the aim point from "far ahead on the route" toward
+          // "what the next shot frames" walks that point straight through the
+          // camera: measured 0.23 m away at 86% of a leg, where a millimetre
+          // of travel swings the view 80 degrees. Directions are unit vectors,
+          // so a blend between them cannot collapse, and the aim point is
+          // re-projected to a fixed distance afterwards.
+          const aim = safeDirection(aheadPoint, p, endTangent);
+          const bFrom = blendOut(e, blendSpan);
+          if (bFrom > 0) aim.lerp(safeDirection(fromLook, p, aim), bFrom);
+          const bTo = blendOut(1 - e, blendSpan);
+          if (bTo > 0) aim.lerp(safeDirection(toLook, p, aim), bTo);
+          if (aim.lengthSq() < 1e-8) aim.copy(endTangent);
+          aim.normalize();
+
+          const look = p.clone().addScaledVector(aim, LOOK_AHEAD_DISTANCE);
           return { position: vec3(p), lookAt: vec3(look) };
         },
         leg.cached === true,
@@ -322,9 +420,13 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     }
   }
 
+  // Bound the worst-case view rotation across the whole table.
+  const clampedFrames = limitTurnRate(frames, opts.fps, opts.maxTurnRateDegPerSec);
+
   const stats: PathStats = {
     gridCols: grid.cols, gridRows: grid.rows, cellSize: grid.cellSize,
     recomputedSegments: recomputed, reusedSegments: reused,
+    turnRateClampedFrames: clampedFrames,
     generateMs: round(now() - t0, 2), gridMs: round(gridMs, 2),
   };
 
@@ -334,10 +436,88 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   };
 }
 
+
+/**
+ * Cap how fast the view direction may rotate, across the finished table.
+ *
+ * Every geometric rule that produces a look target has some configuration
+ * where its derivative blows up - a spline tangent rounding a tight corner, an
+ * aim point passing near the camera, a shot handing over to a leg that frames
+ * something behind it. Chasing those case by case fixed each measurement and
+ * moved the whip somewhere else. A rate limit bounds the worst case by
+ * construction, whatever the source, which is also what a real camera rig
+ * does: an operator cannot snap a head 80 degrees between two frames either.
+ *
+ * Applied forward in time, so a fast target turn becomes a fast-but-finite
+ * sweep that catches up within a few frames rather than a one-frame cut. The
+ * cap is deliberately generous - a genuine whip pan is still allowed.
+ */
+function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: number): number {
+  if (frames.length < 2) return 0;
+  const maxStep = (degreesPerSecond * Math.PI) / 180 / Math.max(1, fps);
+
+  const prev = new THREE.Vector3();
+  const want = new THREE.Vector3();
+  const axis = new THREE.Vector3();
+  let clamped = 0;
+
+  const dirOf = (f: FrameEntry, out: THREE.Vector3) =>
+    out.set(
+      f.lookAt[0] - f.position[0],
+      f.lookAt[1] - f.position[1],
+      f.lookAt[2] - f.position[2],
+    );
+
+  dirOf(frames[0], prev);
+  if (prev.lengthSq() < 1e-12) return 0;
+  prev.normalize();
+
+  for (let i = 1; i < frames.length; i++) {
+    const frame = frames[i];
+    dirOf(frame, want);
+    const distance = want.length();
+    if (distance < 1e-6) {
+      // Degenerate target: keep the previous direction rather than inventing one.
+      frame.lookAt = [
+        frame.position[0] + prev.x * LOOK_AHEAD_DISTANCE,
+        frame.position[1] + prev.y * LOOK_AHEAD_DISTANCE,
+        frame.position[2] + prev.z * LOOK_AHEAD_DISTANCE,
+      ];
+      continue;
+    }
+    want.divideScalar(distance);
+
+    const dot = Math.min(1, Math.max(-1, prev.dot(want)));
+    const angle = Math.acos(dot);
+    if (angle > maxStep) {
+      axis.crossVectors(prev, want);
+      if (axis.lengthSq() < 1e-12) {
+        // Exactly opposed: any perpendicular axis is as good as another.
+        axis.set(0, 1, 0).cross(prev);
+        if (axis.lengthSq() < 1e-12) axis.set(1, 0, 0).cross(prev);
+      }
+      axis.normalize();
+      want.copy(prev).applyAxisAngle(axis, maxStep).normalize();
+      clamped++;
+    }
+
+    // Re-project at the target's own distance so framing scale is preserved.
+    frame.lookAt = [
+      frame.position[0] + want.x * distance,
+      frame.position[1] + want.y * distance,
+      frame.position[2] + want.z * distance,
+    ];
+    prev.copy(want);
+  }
+  return clamped;
+}
+
 /* -------------------------------------------------------------------------- */
 
 type LegResult = {
   curve: THREE.CatmullRomCurve3 | null;
+  /** Arc length of the curve, so a look-ahead can be expressed in metres. */
+  length: number;
   duration: number;
   polyline: Vec3[];
   warnings: PathWarning[];
@@ -378,7 +558,7 @@ function computeLeg(
     const dir = pb.clone().sub(pa).setY(0);
     const length = dir.length();
     return {
-      curve, duration: Math.max(0.4, length / metresPerSecond),
+      curve, length, duration: Math.max(0.4, length / metresPerSecond),
       polyline: [vec3(pa), vec3(pb)], warnings,
       startTangent: length > 1e-6 ? dir.clone().normalize() : null,
       endTangent: length > 1e-6 ? dir.clone().normalize() : null,
@@ -405,7 +585,7 @@ function computeLeg(
 
   if (!built || built.length < 1e-4) {
     return {
-      curve: null, duration: 0.4, polyline: [], warnings,
+      curve: null, length: 0, duration: 0.4, polyline: [], warnings,
       startTangent: null, endTangent: null, hasLookTargets: true,
     };
   }
@@ -435,6 +615,7 @@ function computeLeg(
 
   return {
     curve: built.curve,
+    length: built.length,
     duration: Math.max(0.4, built.length / metresPerSecond),
     polyline,
     warnings,
@@ -498,6 +679,51 @@ function fitShotToRoom(
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * Seconds over which a travel leg eases off its neighbouring shot's pose.
+ *
+ * A fixed duration, not a fixed fraction of the leg. As a fraction, a short
+ * hop compressed the entire turn into two or three frames and produced a
+ * 50-degree-per-frame snap - the very discontinuity the blend exists to
+ * remove. Capped at 40% of the leg so a very short leg still spends some of
+ * itself actually travelling.
+ */
+const BLEND_SECONDS = 0.45;
+
+/** How far ahead a travelling camera looks, in metres. */
+const LOOK_AHEAD_DISTANCE = 3;
+
+/**
+ * Unit direction from `from` to `to`, falling back when they coincide.
+ *
+ * A look target that lands on the camera has no direction, and normalising it
+ * yields a zero vector that then poisons whatever it is blended with.
+ */
+function safeDirection(to: THREE.Vector3, from: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
+  const d = to.clone().sub(from);
+  if (d.lengthSq() < 1e-6) return fallback.clone().normalize();
+  return d.normalize();
+}
+
+function blendFractionFor(durationSeconds: number): number {
+  if (!(durationSeconds > 0)) return 0.4;
+  return Math.min(0.4, Math.max(0.05, BLEND_SECONDS / durationSeconds));
+}
+
+/**
+ * 1 at e = 0, smoothly 0 by e = `span`.
+ *
+ * Smoothstep rather than linear so the correction's velocity is continuous
+ * too: a linear fade removes the position jump but replaces it with a visible
+ * kink where the correction stops being applied.
+ */
+function blendOut(e: number, span: number): number {
+  if (e <= 0) return 1;
+  if (e >= span) return 0;
+  const x = 1 - e / span;
+  return x * x * (3 - 2 * x);
 }
 
 /**

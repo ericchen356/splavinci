@@ -52,6 +52,8 @@ export type PathStats = {
   cellSize: number;
   recomputedSegments: number;
   reusedSegments: number;
+  /** Frames whose view rotation hit the turn-rate ceiling. */
+  turnRateClampedFrames: number;
   /** Milliseconds spent in generation, excluding grid construction. */
   generateMs: number;
   gridMs: number;
@@ -82,7 +84,8 @@ export const EMPTY_PATH: PathResult = {
   warnings: [],
   stats: {
     gridCols: 0, gridRows: 0, cellSize: 0,
-    recomputedSegments: 0, reusedSegments: 0, generateMs: 0, gridMs: 0,
+    recomputedSegments: 0, reusedSegments: 0, turnRateClampedFrames: 0,
+    generateMs: 0, gridMs: 0,
   },
 };
 
