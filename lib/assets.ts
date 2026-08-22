@@ -147,6 +147,57 @@ export const ASSET_SETS: Record<string, AssetSet> = {
 
 export const DEFAULT_ASSET_SET_ID = 'sample-room';
 
+/* -------------------------------------------------------------------------- */
+/* discovered renders                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Captures the user generated are not in the table above and never will be —
+ * they are folders under public/generated/ that appear between one page load
+ * and the next. lib/renders.ts finds them on the server and /api/renders hands
+ * them over; registering them here is what makes `getAssetSet(id)` resolve one,
+ * so every loader downstream stops caring whether a capture was shipped or
+ * made this afternoon.
+ *
+ * A hardcoded entry is never overwritten. Where both exist for the same id the
+ * checked-in one is the tuned definition — maple-street's collider transform
+ * was confirmed against the walls, and scene.json's own derivation of it is
+ * flagged UNVERIFIED in the file.
+ */
+export function registerAssetSets(sets: readonly AssetSet[]): void {
+  for (const set of sets) {
+    if (!ASSET_SETS[set.id]) ASSET_SETS[set.id] = set;
+  }
+}
+
+/** Shape of one row of /api/renders that this module cares about. */
+type RegistryRow = { assetSet: AssetSet };
+
+let registryLoad: Promise<void> | null = null;
+
+/**
+ * Pull the render list once per page and register what it found.
+ *
+ * Any screen that resolves a capture by id — the plan screen reading
+ * `?capture=`, most of all — has to await this first, or a render made after
+ * the build will fall back to the default room with no explanation. Memoised,
+ * so calling it from several components costs one request.
+ *
+ * Failure is swallowed on purpose: the built-in captures still work without
+ * the API, and a home page that renders nothing because a list endpoint
+ * hiccuped is a worse outcome than a short list.
+ */
+export function ensureRendersLoaded(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  registryLoad ??= fetch('/api/renders')
+    .then((response) => (response.ok ? response.json() : { renders: [] }))
+    .then((body: { renders?: RegistryRow[] }) => {
+      registerAssetSets((body.renders ?? []).map((row) => row.assetSet));
+    })
+    .catch(() => {});
+  return registryLoad;
+}
+
 const STORAGE_KEY = 'splavinci.assetSet';
 
 /**
