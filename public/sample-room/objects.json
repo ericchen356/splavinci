@@ -1,0 +1,102 @@
+[
+  {
+    "id": "sofa",
+    "meshUrl": "/sample-room/meshes/sofa.glb",
+    "position": [
+      1.575,
+      0.425,
+      2.2
+    ],
+    "label": "Sofa"
+  },
+  {
+    "id": "coffee-table",
+    "meshUrl": "/sample-room/meshes/coffee-table.glb",
+    "position": [
+      3,
+      0.225,
+      2.2
+    ],
+    "label": "Coffee table"
+  },
+  {
+    "id": "tv",
+    "meshUrl": "/sample-room/meshes/tv.glb",
+    "position": [
+      5.915,
+      1.175,
+      2.2
+    ],
+    "label": "Wall TV"
+  },
+  {
+    "id": "plant",
+    "meshUrl": "/sample-room/meshes/plant.glb",
+    "position": [
+      5.4,
+      0.55,
+      5.6
+    ],
+    "label": "Fiddle-leaf fig"
+  },
+  {
+    "id": "dining-table",
+    "meshUrl": "/sample-room/meshes/dining-table.glb",
+    "position": [
+      4.4,
+      0.375,
+      6.4
+    ],
+    "label": "Dining table"
+  },
+  {
+    "id": "kitchen-counter",
+    "meshUrl": "/sample-room/meshes/kitchen-counter.glb",
+    "position": [
+      1.5,
+      0.45,
+      7.2
+    ],
+    "label": "Kitchen counter"
+  },
+  {
+    "id": "bed",
+    "meshUrl": "/sample-room/meshes/bed.glb",
+    "position": [
+      8.2,
+      0.275,
+      2
+    ],
+    "label": "Bed"
+  },
+  {
+    "id": "nightstand",
+    "meshUrl": "/sample-room/meshes/nightstand.glb",
+    "position": [
+      9.425,
+      0.275,
+      3.525
+    ],
+    "label": "Nightstand"
+  },
+  {
+    "id": "desk",
+    "meshUrl": "/sample-room/meshes/desk.glb",
+    "position": [
+      7,
+      0.375,
+      6.6
+    ],
+    "label": "Desk"
+  },
+  {
+    "id": "wardrobe",
+    "meshUrl": "/sample-room/meshes/wardrobe.glb",
+    "position": [
+      9.2,
+      1.05,
+      6.2
+    ],
+    "label": "Wardrobe"
+  }
+]
