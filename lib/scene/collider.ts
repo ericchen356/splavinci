@@ -135,14 +135,172 @@ export function collectMeshes(root: THREE.Object3D): THREE.Mesh[] {
   return meshes;
 }
 
+
+/**
+ * Split a triangle soup into floor and obstacle by face normal.
+ *
+ * The last-resort classifier, for a collider that arrives as ONE fused mesh.
+ * A real Marble export does exactly that - a single node named `geometry_0`
+ * holding the whole room - which defeats both strategies above: there is no
+ * name to match, and the shape heuristic cannot fire because with one mesh the
+ * slab thickness equals the full vertical range, so nothing is ever "flat".
+ * The result was zero floor meshes and an empty floorBounds, leaving the walk
+ * grid with no walkable surface at all and A* with nothing to route on.
+ *
+ * Geometry still carries the answer at triangle level: a floor faces up. Faces
+ * within `maxSlopeDegrees` of vertical-up become floor, everything else is an
+ * obstacle. That is orientation-based rather than name-based, so it works on a
+ * capture whose naming we have never seen.
+ */
+export function splitSoupByNormal(
+  geometry: THREE.BufferGeometry,
+  maxSlopeDegrees = 40,
+  /** Accept a downward face as horizontal. Only used as a winding fallback. */
+  ignoreWinding = false,
+): { floor: THREE.BufferGeometry; obstacle: THREE.BufferGeometry } {
+  const pos = geometry.getAttribute('position');
+  const minUp = Math.cos((maxSlopeDegrees * Math.PI) / 180);
+  const triCount = Math.floor(pos.count / 3);
+
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+
+  const upFacing = new Uint8Array(triCount);
+  const centroidY = new Float32Array(triCount);
+
+  const bounds = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+    pos as THREE.BufferAttribute,
+  );
+  const spanX = Math.max(1e-6, bounds.max.x - bounds.min.x);
+  const spanZ = Math.max(1e-6, bounds.max.z - bounds.min.z);
+  // Coarse columns purely for the lowest-surface test; 128 across the larger
+  // horizontal axis is fine for deciding "is there floor beneath this face".
+  const columnSize = Math.max(spanX, spanZ) / 128;
+  const cols = Math.max(1, Math.ceil(spanX / columnSize));
+  const lowestUp = new Map<number, number>();
+  const triMinX = new Float32Array(triCount);
+  const triMaxX = new Float32Array(triCount);
+  const triMinZ = new Float32Array(triCount);
+  const triMaxZ = new Float32Array(triCount);
+
+  /** Visit every column a triangle's XZ footprint touches. */
+  const forEachColumn = (t: number, visit: (key: number) => void) => {
+    const c0 = Math.floor((triMinX[t] - bounds.min.x) / columnSize);
+    const c1 = Math.floor((triMaxX[t] - bounds.min.x) / columnSize);
+    const r0 = Math.floor((triMinZ[t] - bounds.min.z) / columnSize);
+    const r1 = Math.floor((triMaxZ[t] - bounds.min.z) / columnSize);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) visit(r * cols + c);
+    }
+  };
+
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 3;
+    a.fromBufferAttribute(pos, i);
+    b.fromBufferAttribute(pos, i + 1);
+    c.fromBufferAttribute(pos, i + 2);
+    ab.subVectors(b, a);
+    ac.subVectors(c, a);
+    normal.crossVectors(ab, ac);
+    const length = normal.length();
+    // Signed, not absolute. glTF mandates counter-clockwise front faces, so an
+    // upward normal really does mean an upward surface - and the distinction
+    // matters: a wall's underside is horizontal too, and folding it into the
+    // floor leaves the wall's interior with no obstacle beneath its top cap,
+    // so the cell never blocks. `ignoreWinding` retries for the rare export
+    // that gets this wrong.
+    const rawUp = length > 1e-12 ? normal.y / length : 0;
+    const upness = ignoreWinding ? Math.abs(rawUp) : rawUp;
+    centroidY[t] = (a.y + b.y + c.y) / 3;
+    triMinX[t] = Math.min(a.x, b.x, c.x);
+    triMaxX[t] = Math.max(a.x, b.x, c.x);
+    triMinZ[t] = Math.min(a.z, b.z, c.z);
+    triMaxZ[t] = Math.max(a.z, b.z, c.z);
+    if (upness < minUp) continue;
+    upFacing[t] = 1;
+    // Footprint, not centroid: a floor can be two enormous triangles whose
+    // centroids fall in two columns, leaving every other column with no
+    // reference height and every wall cap looking like ground.
+    forEachColumn(t, (key) => {
+      const current = lowestUp.get(key);
+      if (current === undefined || centroidY[t] < current) lowestUp.set(key, centroidY[t]);
+    });
+  }
+
+  // A wall's top cap faces up just as much as the floor does, and so does a
+  // ceiling. Taking every up-facing face as floor puts the walkable surface on
+  // top of the walls, which lifts the camera band clear of them and leaves the
+  // grid with nothing blocked at all. Only the lowest horizontal surface over
+  // a triangle's own footprint counts as ground.
+  const LOWEST_TOLERANCE = 0.5;
+  const floorVerts: number[] = [];
+  const obstacleVerts: number[] = [];
+
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 3;
+    a.fromBufferAttribute(pos, i);
+    b.fromBufferAttribute(pos, i + 1);
+    c.fromBufferAttribute(pos, i + 2);
+    let isFloor = false;
+    if (upFacing[t]) {
+      let base = Infinity;
+      forEachColumn(t, (key) => {
+        const v = lowestUp.get(key);
+        if (v !== undefined && v < base) base = v;
+      });
+      isFloor = !Number.isFinite(base) || centroidY[t] - base <= LOWEST_TOLERANCE;
+    }
+    const target = isFloor ? floorVerts : obstacleVerts;
+    target.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  }
+
+  const make = (verts: number[]) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  };
+  return { floor: make(floorVerts), obstacle: make(obstacleVerts) };
+}
+
+/** Wrap a geometry as a Mesh so the floor sampler has something to raycast. */
+function meshFromGeometry(geometry: THREE.BufferGeometry, name: string): THREE.Mesh {
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ visible: false }));
+  mesh.name = name;
+  mesh.updateMatrixWorld(true);
+  return mesh;
+}
+
 /** Parse a loaded collider scene into the shape every other screen consumes. */
 export function buildColliderData(root: THREE.Object3D): ColliderData {
   const meshes = collectMeshes(root);
-  const { floorMeshes, obstacleMeshes } = classifyColliderMeshes(meshes);
+  let { floorMeshes, obstacleMeshes } = classifyColliderMeshes(meshes);
 
   const merged = worldTriangleSoup(meshes);
-  const obstacleGeometry = worldTriangleSoup(obstacleMeshes);
-  const floorGeometry = worldTriangleSoup(floorMeshes);
+  let obstacleGeometry = worldTriangleSoup(obstacleMeshes);
+  let floorGeometry = worldTriangleSoup(floorMeshes);
+
+  // Neither naming nor shape found a floor - a fused single-mesh collider, as
+  // Marble returns. Fall back to per-triangle orientation, which still knows
+  // which faces point up. Without this the grid has no walkable surface.
+  if (floorGeometry.getAttribute('position').count === 0) {
+    let split = splitSoupByNormal(merged);
+    if (split.floor.getAttribute('position').count === 0) {
+      // Nothing faced up at all - the export's winding is inverted or mixed.
+      split = splitSoupByNormal(merged, 40, true);
+    }
+    if (split.floor.getAttribute('position').count > 0) {
+      floorGeometry = split.floor;
+      obstacleGeometry = split.obstacle;
+      floorMeshes = [meshFromGeometry(split.floor, 'floor:derived')];
+      obstacleMeshes = [meshFromGeometry(split.obstacle, 'obstacles:derived')];
+    }
+  }
 
   const bounds = merged.boundingBox?.clone() ?? new THREE.Box3();
   const floorBounds = floorGeometry.boundingBox?.clone() ?? bounds.clone();
