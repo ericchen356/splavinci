@@ -14,17 +14,11 @@ collision mesh.
 
 ## Running it locally
 
-**You do not need an API key to run the app.** The repo ships a synthetic
-apartment, so everything except making new captures works out of the box.
-
 ```bash
 npm install
 npm run fixtures    # builds public/sample-room/ — a stand-in apartment
 npm run dev         # http://localhost:3000
 ```
-
-Then open <http://localhost:3000>, click **Sample room**, and you are on the
-plan screen.
 
 ### Requirements
 
@@ -34,19 +28,9 @@ plan screen.
 | OS | any, to run the app |
 | macOS | only for making a capture *from a video* — the frame extractor uses AVFoundation, so nothing needs installing, but it is macOS-only |
 
-### One thing that will confuse you
-
-If the 3D viewport is blank and the badge sits at exactly **"Loading room…
-50%"**, the browser tab is backgrounded. Chrome throttles `requestAnimationFrame`
-to zero in hidden tabs, so react-three-fiber's canvas never gets a real size and
-the scene never mounts. It is not a bug and the splat is not broken — bring the
-window to the front and reload. The 2D mini-map keeps working either way.
-
 ---
 
 ## Making new captures
-
-This part costs money: every generation spends World Labs API credits.
 
 ```bash
 cp .env.example .env        # then fill in WORLD_LABS_API_KEY
@@ -75,23 +59,6 @@ Output lands in `public/generated/<scene-id>/` as `room.spz`, `collider.glb` and
 `scene.json`, and the home page picks it up on the next load with no code
 change.
 
-### Getting a denser splat for free
-
-Marble keeps several densities of every world it has already made, so density is
-a *download* choice, not a generation choice. Re-fetching a world you already
-paid for costs nothing:
-
-```bash
-npx tsx --env-file=.env scripts/world-densities.ts <world-id>          # what exists, and its size
-npx tsx --env-file=.env scripts/render-scene.ts <scene> --world <id>   # re-download, no generation
-```
-
-`full_res` is around 1.9M points and 29 MB for a room, against 500k and 7.6 MB —
-about four times the splats per square metre, which is what determines how well
-a capture holds up as the camera crosses it. World IDs are in each capture's
-`scene.json`.
-
----
 
 ## Layout
 
@@ -120,22 +87,3 @@ scripts/        capture generation, blueprint drawing, quality measurement
 `npm run typecheck` and `npm run build` are the gates. Both should be clean.
 
 ---
-
-## Known limitations
-
-**Marble does not honour aspect ratio.** It respects ceiling height, materials,
-room count and adjacency, and reliably produces a coherent enclosed interior —
-and then builds the plan roughly square whatever the prompt says. A sample
-asking for 5.4 × 14.0 m (1:2.6) came back 9.2 × 8.9 m (1:0.97), with the
-dimensions stated twice in the prompt. More prompt detail does not fix it.
-
-**Describe every room, or it will not exist.** A scene whose shower room was
-never mentioned in the prompt came back with a dead doorway you could not walk
-through. The sample scenes' `layoutDescription` fields are exhaustive on
-purpose.
-
-**Video is not a Marble input.** A video uploads fine as a media asset and is
-accepted as an `image_prompt`, then fails the generation with a server 500.
-The working route is extracting frames and sending them as multi-image with
-`reconstruct_images`, which is what `render-scene.ts` does — and it is the one
-path where geometry comes from evidence rather than from prose.
