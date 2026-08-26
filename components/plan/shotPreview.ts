@@ -18,8 +18,10 @@
 import * as THREE from 'three';
 import type { PathStyle, Vec3, Waypoint } from '@/lib/types';
 import {
+  DEFAULT_GENERATE,
   easeInOut,
   freeRadiusAt,
+  marchView,
   resolveShot,
   sampleShot,
   type CameraSample,
@@ -71,10 +73,13 @@ export function shotPreviewPoints(
     aim: intent.aim,
     /* The generator scales every shot by the room around it, so a preview that
        leaves this out draws a bigger move than the one that will be flown -
-       which is the whole thing the preview exists to answer. */
+       which is the whole thing the preview exists to answer. Both measurements,
+       because they limit different shots: the sphere bounds an orbit, the axis
+       bounds a push-in. */
     clearance: grid
       ? freeRadiusAt(grid, waypoint.position[0], waypoint.position[1], waypoint.position[2])
       : undefined,
+    axialReach: grid ? axialReach(grid, anchor, intent.targetPoint) : undefined,
   };
 
   const samples: CameraSample[] = [];
@@ -97,6 +102,25 @@ export function shotPreviewPoints(
   if (wedge.length < 3) return [];
   wedge.push([anchor.x, anchor.y, anchor.z]);
   return wedge;
+}
+
+/**
+ * How far the camera may fly from the anchor toward what it frames.
+ *
+ * The same measurement generate.ts makes, and made here rather than imported
+ * from it because the generator's copy is a closure over one run's grid and
+ * radius. If these two ever disagree the preview is drawing a move the
+ * flythrough will not perform, which is the one thing it exists not to do.
+ */
+function axialReach(grid: WalkGrid, from: THREE.Vector3, target: Vec3): number | undefined {
+  const axis = new THREE.Vector3(target[0] - from.x, 0, target[2] - from.z);
+  if (axis.lengthSq() < 1e-8) return undefined;
+  axis.normalize();
+  const limit = Math.hypot(
+    grid.bounds.max.x - grid.bounds.min.x,
+    grid.bounds.max.z - grid.bounds.min.z,
+  );
+  return marchView(grid, from, axis, limit, DEFAULT_GENERATE.radius).distance;
 }
 
 /** Direction of travel through a waypoint, from its neighbours. */

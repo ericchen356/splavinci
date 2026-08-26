@@ -41,6 +41,19 @@ export type ShotContext = {
    */
   clearance?: number;
   /**
+   * Metres the camera may travel FORWARD along its view axis before its body
+   * meets something. Undefined means unmeasured, and nothing limits the move.
+   *
+   * The shots that travel along that axis - push-in, and pull-back, which
+   * starts advanced and retreats - used to be limited by `clearance` instead,
+   * which is the radius of the largest sphere that fits around the camera. That
+   * is the wrong measurement for a move in one direction: a wall 1.2 m BEHIND
+   * the camera has nothing to do with how far forward it may go, and it was
+   * capping every push-in in a room three times that deep. Measured along the
+   * actual axis, the limit is the thing the shot would actually run into.
+   */
+  axialReach?: number;
+  /**
    * Safety scale on ANGULAR amplitude, owned by the wall validator.
    *
    * Separate from `intensity` because the two answer to different people.
@@ -66,8 +79,20 @@ export type CameraSample = { position: THREE.Vector3; lookAt: THREE.Vector3 };
 const AMPLITUDE = {
   orbitSweep: (110 * Math.PI) / 180,
   panSweep: (75 * Math.PI) / 180,
-  pushInFraction: 0.45,
-  pullBackFraction: 0.45,
+  /**
+   * Share of the distance to the subject that a push-in closes, and that a
+   * pull-back opens up, at intensity 1.
+   *
+   * Was 0.45, which never got to mean anything: the clamp beside it was the
+   * omnidirectional clearance, so a push-in in an ordinary room travelled
+   * whatever that happened to be - 0.96 m at every emphasis from 20% to 200%,
+   * measured. With the clamp now measured along the shot's own axis, the
+   * fraction is what actually sets the size of the move, and closing most of
+   * the gap to the subject is what a push-in is. Emphasis scales it further,
+   * up to the room the axis really has.
+   */
+  pushInFraction: 0.8,
+  pullBackFraction: 0.8,
   riseHeight: 1.4,
   dollyLength: 1.8,
   /**
@@ -90,6 +115,24 @@ const AMPLITUDE = {
 
 function horizontalDelta(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3 {
   return new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+}
+
+/**
+ * How far a shot may travel along its view axis, with a margin.
+ *
+ * The margin is not caution about the measurement - `axialReach` already
+ * carries the camera's body - it is about where the shot ENDS. Travelling the
+ * whole way parks the camera flush against whatever it was framing, which is
+ * not a push-in, it is a collision that happens to stop in time.
+ *
+ * Falls back to the omnidirectional clearance where nothing measured the axis
+ * (the panel's live preview before a grid exists), and to unlimited where
+ * neither is known - the wall validator is downstream of this either way.
+ */
+function axialRoom(ctx: ShotContext): number {
+  if (ctx.axialReach !== undefined) return ctx.axialReach * 0.85;
+  if (ctx.clearance !== undefined) return ctx.clearance * 0.8;
+  return Infinity;
 }
 
 /**
@@ -178,10 +221,7 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
     case 'push-in': {
       if (!hasTarget) return dolly(anchor, ctx.tangent, k, t, null, ctx);
-      const travel = Math.min(
-        radius * AMPLITUDE.pushInFraction * k,
-        ctx.clearance !== undefined ? ctx.clearance * 0.8 : Infinity,
-      );
+      const travel = Math.min(radius * AMPLITUDE.pushInFraction * k, axialRoom(ctx));
       const dir = toTarget.clone().normalize();
       return {
         position: anchor.clone().addScaledVector(dir, travel * t),
@@ -191,10 +231,10 @@ export function sampleShot(shotType: ShotType, ctx: ShotContext, u: number): Cam
 
     case 'pull-back': {
       if (!hasTarget) return dolly(anchor, ctx.tangent.clone().negate(), k, t, null, ctx);
-      const travel = Math.min(
-        radius * AMPLITUDE.pullBackFraction * k,
-        ctx.clearance !== undefined ? ctx.clearance * 0.8 : Infinity,
-      );
+      // Forward room, not backward: a pull-back STARTS advanced on its subject
+      // and retreats to the anchor, so the far end of it is the one that has to
+      // fit.
+      const travel = Math.min(radius * AMPLITUDE.pullBackFraction * k, axialRoom(ctx));
       const dir = toTarget.clone().normalize();
       // Starts close and retreats to the waypoint, revealing context.
       return {

@@ -46,6 +46,7 @@ import {
   freeRadiusAt,
   hasFlightPath,
   isFreeAt,
+  marchView,
   worldToCell,
   type GridOptions,
   type WalkGrid,
@@ -320,6 +321,25 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   const roomAround = (position: Vec3): number =>
     freeRadiusAt(grid, position[0], position[1], position[2]);
 
+  /**
+   * How far the camera may fly from `from` toward `to`, body included.
+   *
+   * Horizontal, because the shots that use it (push-in, pull-back) travel in
+   * the horizontal plane about the anchor whatever the pitch of the framing.
+   * Bounded by the room's own span rather than marched to the edge of the
+   * capture: past that there is nothing left to push in ON.
+   */
+  const axialReachFrom = (from: THREE.Vector3, to: THREE.Vector3): number | undefined => {
+    const axis = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+    if (axis.lengthSq() < 1e-8) return undefined;
+    axis.normalize();
+    const limit = Math.hypot(
+      grid.bounds.max.x - grid.bounds.min.x,
+      grid.bounds.max.z - grid.bounds.min.z,
+    );
+    return marchView(grid, from, axis, limit, radius).distance;
+  };
+
   // Memoised: a travel leg needs the NEXT waypoint's opening pose to stay
   // continuous with it, so each shot is asked for twice and fitting it is the
   // expensive part.
@@ -341,6 +361,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       hasTarget: intent.targetDistance > 1e-6,
       aim: intent.aim,
       clearance: roomAround(wp.position),
+      axialReach: axialReachFrom(anchorOf(wp), new THREE.Vector3(...intent.targetPoint)),
     };
     const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius, wp.ignoreWalls);
     fittedShots.set(index, fitted);

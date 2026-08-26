@@ -559,8 +559,16 @@ export function isFreeAt(
   return true;
 }
 
-/** Probe sizes for `freeRadiusAt`, ascending. Metres. */
-const CLEARANCE_LADDER = [0.15, 0.3, 0.6, 1.2, 2.4, 4.8];
+/**
+ * Probe sizes for `freeRadiusAt`, ascending. Metres.
+ *
+ * Finer and longer than the doubling ladder it replaces, because the answer is
+ * used as a LIMIT and a limit quantised to powers of two throws away most of
+ * the room it is measuring: a camera with 2.3 m around it reported 1.2 m, and
+ * every shot scaled by that number came out at half the size the space allowed.
+ * Ten probes is ninety array reads, once per waypoint.
+ */
+const CLEARANCE_LADDER = [0.15, 0.3, 0.5, 0.75, 1.0, 1.4, 1.9, 2.6, 3.6, 5.0, 7.0];
 
 /**
  * Room to move at a point in space, in metres.
@@ -629,6 +637,12 @@ export function marchView(
   from: { x: number; y: number; z: number },
   direction: { x: number; y: number; z: number },
   maxDistance: number,
+  /**
+   * Body radius to carry along the ray. Zero asks what the camera can SEE - a
+   * sightline has no width - and a real radius asks how far it can actually
+   * travel that way, which is a different and shorter answer.
+   */
+  radius = 0,
 ): { distance: number; hit: boolean } {
   const step = Math.max(0.02, grid.cellSize * 0.5);
   const steps = Math.max(1, Math.ceil(maxDistance / step));
@@ -644,7 +658,7 @@ export function marchView(
       return { distance: Math.max(0, d - step), hit: false };
     }
 
-    if (!isFreeAt(grid, x, y, z, 0)) {
+    if (!isFreeAt(grid, x, y, z, radius)) {
       // Back off to the last clear sample: the hit sample is INSIDE whatever
       // was struck, and framing a point inside a wall puts the look target
       // behind the surface the user was actually looking at.

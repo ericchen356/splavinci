@@ -193,6 +193,37 @@ for (const w of single.warnings) console.log(`  [${w.severity}] ${w.code}: ${w.m
 const none = generatePath({ collider, waypoints: [], settings }, createPathCache());
 for (const w of none.warnings) console.log(`  [${w.severity}] ${w.code}: ${w.message}`);
 
+/* ---------------- how far a push-in actually travels ---------------- */
+/* The move that used to be measurably inert. Its limit was the radius of the
+   largest sphere fitting around the camera - a wall BEHIND it capping how far
+   forward it could go - so it came out the same distance at every emphasis
+   setting from 20% to 200%. Measured along its own axis instead, the fraction
+   and the slider both mean something again. */
+console.log('\n=== push-in and pull-back ===');
+{
+  const axial: Vec3[] = [[3.0, 0, 2.2], [4.4, 0, 5.2], [8.2, 0, 4.0]];
+  for (const emphasis of [0.5, 1, 2]) {
+    const base = poseWaypoints(grid, axial);
+    const wps: Waypoint[] = base.map((w, i) =>
+      i === 0
+        ? { ...w, mode: 'manual' as const, shotType: 'push-in' as const, duration: 4, emphasis }
+        : i === 1
+          ? { ...w, mode: 'manual' as const, shotType: 'pull-back' as const, duration: 4, emphasis }
+          : w);
+    const out = generatePath({ collider, waypoints: wps, settings }, createPathCache());
+    const line = ['w1', 'w2'].map((id) => {
+      const shot = out.shots.find((sh) => sh.waypointId === id)!;
+      const seg = out.segments.find((sg) => sg.kind === 'shot' && sg.waypointId === id)!;
+      const a = out.frames[seg.frameStart].position;
+      const b = out.frames[seg.frameStart + seg.frameCount - 1].position;
+      const d = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      const view = readView(grid, wps.find((w) => w.id === id)!);
+      return `${shot.shotType} ${d.toFixed(2)} m of ${view.subjectDistance.toFixed(2)} m to subject`;
+    });
+    console.log(`  emphasis ${String(Math.round(emphasis * 100)).padStart(3)}%  ${line.join('   ')}`);
+  }
+}
+
 /* ---------------- overriding the collider ---------------- */
 /* A collider is a reconstruction, so a waypoint has to be able to say "that
    wall is not there". The measurement must not change - only what is done
