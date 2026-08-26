@@ -275,12 +275,22 @@
 }
 
 /* Selected is an ink border and weight, never a colour. */
-.review__chip[aria-current='true'],
-.review__chip[aria-pressed='true'] {
+/* Two states that used to be one rule, now that a stop chip carries both.
+   `aria-current` is where the playhead is: an outline, because it moves on its
+   own and a filled chip travelling down the strip during playback is a
+   distraction. `aria-pressed` is the panel the user opened: a fill, because it
+   is a choice they made and it has to stay findable after the playhead has
+   moved on from it. */
+.review__chip[aria-current='true'] {
   color: var(--ink);
   font-weight: 650;
   border-color: var(--accent);
   box-shadow: var(--shadow-1);
+}
+.review__chip[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--accent-soft);
+  border-color: var(--line-strong);
 }
 
 /* Nothing here for :disabled on purpose - the shared button rule greys the

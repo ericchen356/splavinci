@@ -37,7 +37,7 @@ import { WaypointPanel, generatedShotFor } from '@/components/plan/WaypointPanel
 import { PlaybackCamera } from '@/components/review/PlaybackCamera';
 import { ScrubBar, timecode } from '@/components/review/ScrubBar';
 import { useRoomAssets } from '@/lib/scene';
-import { getWalkGrid, sampleAtTime, segmentAtTime, type PathSegmentInfo } from '@/lib/path';
+import { getWalkGrid, sampleAtTime } from '@/lib/path';
 import { usePlanStore } from '@/lib/plan/planStore';
 import { useReviewStore } from '@/lib/review/reviewStore';
 import { isRecordingSupported } from '@/lib/review/recorder';
@@ -46,7 +46,6 @@ import type { Comment, FrameEntry, Vec3 } from '@/lib/types';
 /* Stable empties: a fresh [] literal per render busts every downstream memo,
    and the mini-map redraws its whole plan layer when one changes identity. */
 const NO_FRAMES: readonly FrameEntry[] = [];
-const NO_SEGMENTS: readonly PathSegmentInfo[] = [];
 const NO_POLYLINE: readonly Vec3[] = [];
 
 /**
@@ -140,11 +139,6 @@ export default function ReviewPage() {
   const frames = path?.frames ?? NO_FRAMES;
   const duration = path?.duration ?? 0;
   const pose = useMemo(() => sampleAtTime(frames, time), [frames, time]);
-  const segment = useMemo(
-    () => segmentAtTime(path?.segments ?? NO_SEGMENTS, time),
-    [path, time],
-  );
-  const activeShot = path?.shots.find((s) => s.waypointId === pose?.activeWaypointId) ?? null;
   // The mini-map redraws whenever this prop changes identity, so it is derived
   // from the pose rather than rebuilt as a literal on every unrelated render.
   const mapCamera = useMemo(
@@ -446,8 +440,18 @@ export default function ReviewPage() {
               disabled={recording}
             />
 
-            {/* The running order, under the track it indexes. Each stop is a
-                place to land, so each one is a button rather than a caption. */}
+            {/* The running order, under the track it indexes.
+                Each stop is a place to land AND the way into its controls: one
+                press seeks there and opens its panel. It used to only seek, and
+                editing what you had just landed on meant finding a second
+                control ("Now: pan") somewhere else on the screen that toggled
+                the panel for whichever shot happened to be playing by then -
+                two presses, in two places, for one intention.
+
+                `aria-current` is the shot the playhead is in; `aria-pressed` is
+                the one whose panel is open. They coincide the instant you press
+                a chip and drift apart as playback carries on, which is exactly
+                when knowing which is which starts to matter. */}
             {stops.length > 0 && (
               <div className="review__strip">
                 {stops.map((stop) => (
@@ -456,9 +460,13 @@ export default function ReviewPage() {
                     type="button"
                     className="review__chip"
                     aria-current={stop.id === pose?.activeWaypointId}
+                    aria-pressed={stop.id === editingWaypointId}
                     disabled={recording}
-                    title={`Jump to shot ${stop.number}: ${stop.shotType}`}
-                    onClick={() => jumpTo(stop.startTime)}
+                    title={`Shot ${stop.number}: ${stop.shotType} — jump here and edit it`}
+                    onClick={() => {
+                      jumpTo(stop.startTime);
+                      editWaypoint(stop.id);
+                    }}
                   >
                     <span className="review__chip-n">{stop.number}</span>
                     {stop.shotType}
@@ -500,25 +508,6 @@ export default function ReviewPage() {
               <span className="review__time-now">{timecode(time)}</span>
               <span className="review__time-total">/ {timecode(duration)}</span>
             </span>
-
-            {/* the live technique label */}
-            {activeShot && (
-              <button
-                type="button"
-                className="review__chip"
-                aria-pressed={editingWaypointId === activeShot.waypointId}
-                onClick={() => editWaypoint(
-                  editingWaypointId === activeShot.waypointId ? null : activeShot.waypointId,
-                )}
-                disabled={recording}
-                title="Edit this shot"
-              >
-                Now: <strong>{activeShot.shotType}</strong>
-                <span className="review__chip-meta">
-                  {segment?.kind === 'travel' ? 'approaching' : 'shot'}
-                </span>
-              </button>
-            )}
 
             <span className="spacer" />
 
