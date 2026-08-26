@@ -105,7 +105,13 @@ export default function Home() {
           }
           return;
         }
-        const body = (await response.json()) as { job: JobView };
+        // A 500, or a proxy answering with an HTML error page, is a dropped
+        // poll and not news about the build. Without this the undefined `job`
+        // it parses to unmounts the panel and stops the loop, and a generation
+        // that is still running and still billing disappears off the screen.
+        if (!response.ok) throw new Error(`the job endpoint returned ${response.status}`);
+        const body = (await response.json()) as { job?: JobView };
+        if (!body.job) throw new Error('the job endpoint answered without a job');
         if (!stopped) setJob(body.job);
       } catch {
         // A dropped poll is not a failed build. The next tick asks again.
