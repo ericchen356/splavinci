@@ -73,17 +73,3 @@ lib/
 samples/        one folder per sample scene: blueprint, photos, intake.json
 scripts/        capture generation, blueprint drawing, quality measurement
 ```
-
-## Scripts worth knowing
-
-| | |
-|---|---|
-| `scripts/render-scene.ts` | generate a capture from a `samples/` folder (`--dry-run` first) |
-| `scripts/scene-quality.ts` | measure a capture — coverage, holes, whether a camera can route it |
-| `scripts/make-blueprint.mjs` | draw the sample floor plans; the geometry lives here, not in the PNGs |
-| `scripts/world-densities.ts` | list a finished world's splat densities and their sizes |
-| `scripts/video-frames.swift` | pull evenly spaced stills out of a video (macOS) |
-
-`npm run typecheck` and `npm run build` are the gates. Both should be clean.
-
----
