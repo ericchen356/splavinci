@@ -33,19 +33,20 @@
  * the frame in order to argue with the mesh. `ignoreWalls` is that override, and
  * it is offered exactly where the bad news is delivered.
  *
- * WHAT THE RESOLVED SHOT LINE IS ALLOWED TO CLAIM
+ * WHICH SHOT THE CONTROLS DESCRIBE
  * `resolveShot` runs before the generator measures the shot against the walls,
  * so on its own it is a proposal, not a report: `fitShotToRoom` may shrink the
- * move, or - where even a motionless camera clips - hold instead. Rendering
- * that proposal as fact is what let the panel promise an orbit the camera never
- * performed. So the generated shot wins whenever one exists, and a shot the
- * walls changed says so.
+ * move, or - where even a motionless camera clips - hold instead. So the SHAPE
+ * of the controls follows the GENERATED shot - which handles the dial has,
+ * which quantity the slider names - because that is the shot that will actually
+ * be performed. Their VALUES stay on the live resolution and on the waypoint
+ * itself: a dial reporting a path generated before the current edit would not
+ * respond to being dragged.
  *
- * The SHAPE of the controls below that line follows the generated shot too -
- * which handles the dial has, which quantity the slider names - because those
- * describe the shot that will actually be performed. Their VALUES stay on the
- * live resolution and on the waypoint itself: a dial reporting a path generated
- * before the current edit would not respond to being dragged.
+ * The panel does not restate the shot and its length in prose. Both screens
+ * already print them next to every waypoint - the running order on /plan, the
+ * stop chips on /review - and a third copy inside the controls that set them
+ * was the largest block of text on the card saying the least.
  *
  * WHERE THE FACING COMES FROM
  * The dial opens on the bearing the waypoint was CAPTURED at, not on one the
@@ -228,63 +229,13 @@ export function WaypointPanel({
         </div>
       </header>
 
-      {/* ---- what will actually happen ---- */}
-      <div className="insp__resolved" title={shown.reason}>
-        <p className="insp__resolved-line">
-          <strong className="insp__shot">{shown.shotType}</strong>
-          <span className="insp__resolved-for"> for </span>
-          <strong className="num">{shown.duration.toFixed(1)}s</strong>
-        </p>
-        {wallFit !== 'clear' && (
-          <p className="insp__clipped" data-fit={wallFit} title={clipped?.message}>
-            {wallFit === 'forced'
-              ? 'clips the collider — performed as you asked'
-              : replaced
-                ? `${askedFor} clips a wall — ${shown.shotType} instead`
-                : 'tightened to clear the walls'}
-          </p>
-        )}
-      </div>
-
-      {/* ---- and what to do when the collider is wrong about it ---- */}
-      {showWallOverride && (
-        <div className="insp__field">
-          <div className="insp__label">
-            <span className="insp__label-name">Walls</span>
-            <span className="insp__label-note">
-              {waypoint.ignoreWalls ? 'ignoring the collider' : 'the collider decides'}
-            </span>
-          </div>
-          <div className="insp__choices" role="group" aria-label="What to do where this shot clips">
-            <button
-              type="button"
-              className="insp__choice"
-              aria-pressed={!waypoint.ignoreWalls}
-              onClick={() => onChange({ ignoreWalls: false })}
-            >
-              Fit the shot
-            </button>
-            <button
-              type="button"
-              className="insp__choice"
-              aria-pressed={waypoint.ignoreWalls}
-              onClick={() => onChange({ ignoreWalls: true })}
-            >
-              Perform anyway
-            </button>
-          </div>
-          <p className="insp__hint">
-            The collision mesh is reconstructed from photographs, so it invents
-            walls the room does not have. Perform anyway keeps the shot exactly
-            as authored; the clip is still measured and reported.
-          </p>
-        </div>
-      )}
-
       {/* ---- who decides ---- */}
       <div className="insp__field">
         <div className="insp__label">
-          <span className="insp__label-name">Shot</span>
+          {/* The reason auto gave, as a tooltip. It used to head the panel as a
+              line of prose repeating the shot and its length, which the running
+              order already prints beside every waypoint on both screens. */}
+          <span className="insp__label-name" title={shown.reason}>Shot</span>
         </div>
         <div className="insp__choices" role="group" aria-label="Who picks this shot">
           <button
@@ -360,6 +311,45 @@ export function WaypointPanel({
             />
           </div>
         </>
+      )}
+
+      {/* ---- the escape hatch, where the collider changed the shot ----
+             No explanation, and no status line: the row only exists on a
+             waypoint whose shot clips, so its presence IS the news. What it
+             cannot say for itself is which way round it currently is, and the
+             note carries that. */}
+      {showWallOverride && (
+        <div className="insp__field">
+          <div className="insp__label">
+            <span
+              className="insp__label-name"
+              title={clipped?.message ?? 'This shot passes through the collision mesh.'}
+            >
+              Walls
+            </span>
+            <span className="insp__label-note">
+              {replaced ? `clips — ${shown.shotType} instead` : 'clips'}
+            </span>
+          </div>
+          <div className="insp__choices" role="group" aria-label="Where this shot clips">
+            <button
+              type="button"
+              className="insp__choice"
+              aria-pressed={!waypoint.ignoreWalls}
+              onClick={() => onChange({ ignoreWalls: false })}
+            >
+              Fit
+            </button>
+            <button
+              type="button"
+              className="insp__choice"
+              aria-pressed={waypoint.ignoreWalls}
+              onClick={() => onChange({ ignoreWalls: true })}
+            >
+              Ignore
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ---- where the shot points ---- */}

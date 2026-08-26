@@ -96,57 +96,6 @@
   background: var(--danger-soft);
 }
 
-/* ---------------- what will actually happen ---------------- */
-
-/* The one thing on the card that is a report rather than a control, so it is
-   the one thing sitting in a well. */
-.insp__resolved {
-  padding: var(--s3) var(--s4);
-  background: var(--surface-sunk);
-  border-radius: var(--r-md);
-}
-
-.insp__resolved-line {
-  font-size: var(--fs-3);
-  line-height: 1.4;
-}
-
-.insp__shot {
-  font-weight: 650;
-  color: var(--ink);
-}
-
-.insp__resolved-for {
-  font-weight: 400;
-  color: var(--muted);
-}
-
-.insp__clipped {
-  margin-top: var(--s1);
-  font-size: var(--fs-1);
-  line-height: 1.4;
-  color: var(--warn);
-}
-
-/* A shot the user has deliberately kept is not a warning any more. It still
-   has to be SAID - the render really does pass through the collider - but in
-   the voice of a note rather than of a problem, or the panel spends the rest
-   of the session insisting on a decision that has already been made. */
-.insp__clipped[data-fit='forced'] {
-  color: var(--muted);
-}
-
-/* The sentence under a control that needs one. Only the wall override has
-   earned one so far: it is the single place in this panel where the right
-   answer depends on something the app cannot see - whether the wall the mesh
-   is reporting is really there. */
-.insp__hint {
-  margin: 0;
-  font-size: var(--fs-1);
-  line-height: 1.5;
-  color: var(--muted);
-}
-
 /* ================================================================
  * Fields
  * ================================================================ */
