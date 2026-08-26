@@ -22,7 +22,7 @@
  * be a class because there is one of them per frame of the timeline.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 /* This screen's half of the global sheet. Imported here rather than in
    app/layout.tsx beside the other partials only because five agents are
@@ -48,6 +48,18 @@ import type { Comment, FrameEntry, Vec3 } from '@/lib/types';
 const NO_FRAMES: readonly FrameEntry[] = [];
 const NO_SEGMENTS: readonly PathSegmentInfo[] = [];
 const NO_POLYLINE: readonly Vec3[] = [];
+
+/**
+ * How long an edit waits before the flythrough is rebuilt, in milliseconds.
+ *
+ * Long enough that a continuous gesture - a dial turn, a slider drag - lands as
+ * one rebuild, short enough that letting go feels like it took effect
+ * immediately. Nothing about the PANEL waits on this: every control reads the
+ * waypoint, which the edit has already changed, so the numbers move with the
+ * pointer. What waits is the camera and the route, which is the expensive half
+ * and the half nobody expects to keep up with a drag.
+ */
+const REBUILD_DELAY_MS = 180;
 
 /**
  * Elements that already answer to Space themselves.
@@ -103,6 +115,12 @@ export default function ReviewPage() {
 
   const [draftText, setDraftText] = useState('');
 
+  /* A rebuild booked but not yet started. Declared up here with the rest of
+     this screen's own state because `settling` below is derived from it, and
+     `settling` has to exist before anything that reports on the plan. */
+  const rebuild = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [rebuildPending, setRebuildPending] = useState(false);
+
   const grid = useMemo(
     () => (assets.colliderData ? getWalkGrid(assets.colliderData) : null),
     [assets.colliderData],
@@ -144,13 +162,19 @@ export default function ReviewPage() {
   const editingShot = generatedShotFor(path, editingWaypointId, !dirty);
 
   const hasPath = frames.length > 0;
+  /* One state for "the plan is being caught up with", covering the wait before
+     a debounced rebuild starts as well as the rebuild itself. Everything that
+     used to key off `generating` alone reads this, so nothing on screen can
+     flip twice in the gap between the two. */
+  const settling = rebuildPending || generating;
   /* The path on screen is not the plan any more: the mini-map is drawing new
      waypoints over an old route, the camera is flying the old one, and the
      technique panel is reporting a shot that has not been generated yet. */
   const stale = hasPath && dirty;
-  // A rebuild already under way is not something to warn about - it is the
-  // fix, in progress - and every tick of a slider would otherwise flash it.
-  const showStale = stale && !generating;
+  // A rebuild already under way or already booked is not something to warn
+  // about - it is the fix, in progress - and every tick of a slider would
+  // otherwise flash it.
+  const showStale = stale && !settling;
 
   /* The running order, as stops on the timeline: which shot, in what order,
      how long, and where to land to see it. The generator emits shots in
@@ -178,8 +202,46 @@ export default function ReviewPage() {
   // The plan store's generate settles its own failures into `generateError`,
   // so there is nothing to catch here and nothing to wait for.
   const runGenerate = useCallback(() => {
+    if (rebuild.current !== null) {
+      clearTimeout(rebuild.current);
+      rebuild.current = null;
+    }
+    setRebuildPending(false);
     void generate(assets.colliderData);
   }, [assets.colliderData, generate]);
+
+  /**
+   * Rebuilding after an EDIT, which is a different job from rebuilding because
+   * a button was pressed.
+   *
+   * An edit here can arrive thirty times a second - the aim dial commits on
+   * every pointermove, which is what makes it feel like turning a dial - and
+   * each one used to book a full regenerate. The store folds calls that land
+   * while one is yielding to the paint, so the work stayed bounded, but the
+   * FLAG did not: `generating` went true and false again between frames, and
+   * the transport alternated the "Regenerating the flythrough…" note with the
+   * "This flythrough is out of date" one for the whole drag. Two blocks of
+   * different heights swapping at frame rate, with the timeline below them
+   * moving each time. That is the flicker.
+   *
+   * A trailing delay collapses a drag into one rebuild at the end of it, and
+   * `rebuildPending` keeps the screen in a single settled state for the
+   * duration rather than reporting each intermediate value as a finished plan.
+   */
+  const scheduleGenerate = useCallback(() => {
+    setRebuildPending(true);
+    if (rebuild.current !== null) clearTimeout(rebuild.current);
+    rebuild.current = setTimeout(() => {
+      rebuild.current = null;
+      setRebuildPending(false);
+      void generate(assets.colliderData);
+    }, REBUILD_DELAY_MS);
+  }, [assets.colliderData, generate]);
+
+  // A pending rebuild must not outlive the screen that asked for it.
+  useEffect(() => () => {
+    if (rebuild.current !== null) clearTimeout(rebuild.current);
+  }, []);
 
   /* ---------------- the transport shortcut ---------------- */
 
@@ -230,7 +292,7 @@ export default function ReviewPage() {
   const [armed, setArmed] = useState(false);
 
   const canRecord =
-    supported === true && hasPath && !stale && !generating && !recording && canvas !== null;
+    supported === true && hasPath && !stale && !settling && !recording && canvas !== null;
   const recordBlockedReason = !hasPath
     ? 'Generate a path first.'
     : stale
@@ -293,10 +355,11 @@ export default function ReviewPage() {
       if (!editing) return;
       updateWaypoint(editing.id, patch);
       // Marking the waypoint pinned scopes the rebuild to the legs touching it;
-      // the rest of the frame table is served from cache.
-      runGenerate();
+      // the rest of the frame table is served from cache. Scheduled rather than
+      // run, so a dial drag is one rebuild and not one per frame.
+      scheduleGenerate();
     },
-    [editing, updateWaypoint, runGenerate],
+    [editing, updateWaypoint, scheduleGenerate],
   );
 
   return (
@@ -348,7 +411,7 @@ export default function ReviewPage() {
 
         {/* ---------------- transport ---------------- */}
         <div className="review__transport">
-          {generating && (
+          {settling && (
             <div className="review__note" role="status">
               <div className="review__note-body">Regenerating the flythrough…</div>
             </div>
