@@ -16,7 +16,14 @@
  */
 
 import { create } from 'zustand';
-import type { Comment, PathSettings, PathStyle, Vec3, Waypoint } from '@/lib/types';
+import type {
+  CameraPose,
+  Comment,
+  PathSettings,
+  PathStyle,
+  Vec3,
+  Waypoint,
+} from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
 import { describeError } from '@/lib/scene/loaders';
 import {
@@ -67,18 +74,33 @@ function nextWaypointId(): string {
   return `wp-${waypointCounter}`;
 }
 
-/** A newly dropped waypoint starts fully automatic - the user opts in to control. */
-export function makeWaypoint(position: Vec3): Waypoint {
+/**
+ * A newly captured waypoint starts fully automatic - the user opts in to
+ * control.
+ *
+ * The pose is copied field by field rather than spread, so a caller handing in
+ * a live object (the capture reads straight off the camera) cannot leave the
+ * store holding a reference that keeps changing under it.
+ */
+export function makeWaypoint(pose: CameraPose): Waypoint {
   return {
     id: nextWaypointId(),
-    position,
+    position: [pose.position[0], pose.position[1], pose.position[2]],
+    yaw: pose.yaw,
+    pitch: pose.pitch,
+    fov: pose.fov,
     // New waypoints start automatic: the user opts in to control.
     mode: 'auto',
     shotType: 'orbit',
     duration: 4,
     emphasis: 1,
-    // Null lets the generator pick an arc; the dial sets it explicitly.
+    /* Null takes the captured facing. Deliberately not seeded from `yaw` here:
+       a stored aim reads as "the user set this", so the dial would open marked
+       `set by you` on a bearing nobody typed, and Reset would have nothing to
+       go back to. resolveShot derives the same bearing from the pose anyway. */
     aim: null,
+    // The collider is trusted until it is caught being wrong about this shot.
+    ignoreWalls: false,
     pinned: false,
   };
 }
@@ -94,7 +116,9 @@ export type PlanStore = {
   /** Bumped whenever waypoints change after a generate, so the UI can say "stale". */
   dirty: boolean;
 
-  addWaypoint(position: Vec3): string;
+  /** Record the camera exactly as it stands. The capture key's whole job. */
+  addWaypoint(pose: CameraPose): string;
+  /** Move a waypoint's camera without touching how it is pointed. */
   moveWaypoint(id: string, position: Vec3): void;
   updateWaypoint(id: string, patch: Partial<Omit<Waypoint, 'id'>>): void;
   removeWaypoint(id: string): void;
@@ -128,8 +152,8 @@ export const usePlanStore = create<PlanStore>((set, get) => ({
   dirty: false,
   comments: [],
 
-  addWaypoint(position) {
-    const wp = makeWaypoint(position);
+  addWaypoint(pose) {
+    const wp = makeWaypoint(pose);
     set((s) => ({ waypoints: [...s.waypoints, wp], selectedId: wp.id, dirty: true }));
     return wp.id;
   },

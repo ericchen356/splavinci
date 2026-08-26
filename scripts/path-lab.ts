@@ -10,8 +10,70 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { buildColliderData } from '@/lib/scene/collider';
-import { buildWalkGrid, gridStats, cellIndex, worldToCell, cellToWorld, type WalkGrid } from '@/lib/path/grid';
+import {
+  buildWalkGrid, gridStats, cellIndex, worldToCell, cellToWorld, floorYAtCell,
+  type WalkGrid,
+} from '@/lib/path/grid';
 import { findPath, simplifyPath, DEFAULT_ASTAR } from '@/lib/path/astar';
+import { DEFAULT_FOV } from '@/lib/pose';
+import type { Vec3, Waypoint } from '@/lib/types';
+
+/**
+ * Floor spots -> captured camera poses.
+ *
+ * The screens no longer produce waypoints from floor points, so a script that
+ * builds them from floor points is testing a shape the app cannot make. This
+ * stands in for the capture key: flown to eye height above each spot and
+ * pointed at the next stop, which is what someone walking a route and pressing
+ * F at each stop would actually record.
+ *
+ * Pass `pitch` to stand in for a capture taken looking down - the case the
+ * elevated branch of the shot rule exists for.
+ */
+export function poseWaypoints(
+  grid: WalkGrid,
+  spots: readonly Vec3[],
+  options: { height?: number; pitch?: number } = {},
+): Waypoint[] {
+  const height = options.height ?? 1.55;
+  const pitch = options.pitch ?? 0;
+  const lift = (p: Vec3): Vec3 => {
+    const { col, row } = worldToCell(grid, p[0], p[2]);
+    return [p[0], floorYAtCell(grid, col, row, grid.medianFloorY) + height, p[2]];
+  };
+
+  return spots.map((spot, i) => {
+    const position = lift(spot);
+    /* Facing: at the next stop, and for the last one straight on past it.
+     *
+     * Deliberately not "back at the previous stop", which is what a naive
+     * fallback gives and which plants a 180 degree reversal at the end of every
+     * fixture route - a case worth testing on purpose, never by accident. A
+     * lone waypoint has no neighbour at all and faces +x, stated here rather
+     * than left to fall out of an atan2 of two zeroes. */
+    const next = spots[i + 1];
+    const previous = spots[i - 1];
+    const yaw = next
+      ? Math.atan2(next[2] - position[2], next[0] - position[0])
+      : previous
+        ? Math.atan2(position[2] - previous[2], position[0] - previous[0])
+        : 0;
+    return {
+      id: `w${i + 1}`,
+      position,
+      yaw,
+      pitch,
+      fov: DEFAULT_FOV,
+      mode: 'auto',
+      shotType: 'orbit',
+      duration: 4,
+      emphasis: 1,
+      aim: null,
+      ignoreWalls: false,
+      pinned: false,
+    };
+  });
+}
 
 export function loadColliderFromDisk(path: string) {
   const buf = readFileSync(path);

@@ -18,8 +18,8 @@
 import * as THREE from 'three';
 import type { PathStyle, Vec3, Waypoint } from '@/lib/types';
 import {
-  DEFAULT_GENERATE,
   easeInOut,
+  freeRadiusAt,
   resolveShot,
   sampleShot,
   type CameraSample,
@@ -55,10 +55,11 @@ export function shotPreviewPoints(
   if (!waypoint) return [];
 
   const intent = resolveShot(waypoint, grid, style);
-  // Waypoints are floor points; the camera flies at eye height above them.
+  // The waypoint IS the camera position - the pose that was captured - so the
+  // preview starts exactly where the flythrough will.
   const anchor = new THREE.Vector3(
     waypoint.position[0],
-    waypoint.position[1] + DEFAULT_GENERATE.cameraHeight,
+    waypoint.position[1],
     waypoint.position[2],
   );
   const context: ShotContext = {
@@ -67,6 +68,13 @@ export function shotPreviewPoints(
     tangent: tangentThrough(waypoints, index),
     intensity: intent.intensity,
     hasTarget: intent.targetDistance > 1e-6,
+    aim: intent.aim,
+    /* The generator scales every shot by the room around it, so a preview that
+       leaves this out draws a bigger move than the one that will be flown -
+       which is the whole thing the preview exists to answer. */
+    clearance: grid
+      ? freeRadiusAt(grid, waypoint.position[0], waypoint.position[1], waypoint.position[2])
+      : undefined,
   };
 
   const samples: CameraSample[] = [];

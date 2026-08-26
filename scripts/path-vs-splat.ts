@@ -8,7 +8,7 @@
  * agrees with the splat. This checks the frames against the ORIGINAL density
  * field, the only thing that actually describes where the geometry is.
  */
-import { loadColliderFromDisk } from './path-lab';
+import { loadColliderFromDisk, poseWaypoints } from './path-lab';
 import {
   generatePath, createPathCache, buildWalkGrid, cellIndex, cellToWorld,
   reachableMask, resolveCameraRadius,
@@ -70,10 +70,10 @@ for (let i = 0; spots.length < 4 && i < grid.cols * grid.rows; i += 53) {
 }
 console.log(`camera radius ${resolved.radius.toFixed(2)}m${resolved.relaxed ? ' (relaxed)' : ''}, ` +
             `reachable ${reach.cells} cells`);
-const waypoints: Waypoint[] = spots.map((p, i) => ({
-  id: `w${i + 1}`, position: p, mode: 'auto', shotType: 'orbit',
-  duration: 4, emphasis: 1, pinned: false,
-}));
+/* Poses, not floor points: the pipeline takes captured cameras now, and a
+   waypoint built the old way would put the camera on the floor and test a
+   flight nobody can author. */
+const waypoints: Waypoint[] = poseWaypoints(grid, spots);
 const res = generatePath({ collider, waypoints, settings: { style: 'realEstate' } }, createPathCache());
 console.log(`\n${waypoints.length} waypoints -> ${res.frames.length} frames, ${res.duration}s`);
 

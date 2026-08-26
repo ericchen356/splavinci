@@ -12,22 +12,41 @@
  * be played down without taking it over, and a manual shot can be gentle.
  *
  * The auto end reads geometry rather than labels. There are no meshed objects
- * to identify, so it measures the waypoint's distance to the nearest wall -
- * already computed as the walk grid's clearance field - and expresses it as a
- * rank within that scene's own clearance distribution. Ranking rather than
- * thresholding in metres is what lets the same rule behave sensibly in a small
- * flat and in a large outdoor capture.
+ * to identify, so it measures the room around the waypoint - the walk grid's
+ * clearance field - and expresses it as a rank within that scene's own
+ * clearance distribution. Ranking rather than thresholding in metres is what
+ * lets the same rule behave sensibly in a small flat and in a large outdoor
+ * capture.
+ *
+ * WHAT CHANGED WHEN WAYPOINTS BECAME CAMERA POSES
+ * A waypoint used to be a dot on the floor, so the only questions the rule
+ * could ask were about where it stood: how boxed in is this spot, and which way
+ * is the nearest wall. It then invented a facing from the answer, which is why
+ * an auto shot so often pointed at nothing in particular.
+ *
+ * A captured pose already answers the harder question - the user aimed the
+ * camera at something and pressed a key - so the rule now measures ALONG that
+ * aim (`readView`) instead of guessing across the floor. Three signals decide
+ * the shot: how high the camera is standing, how far its own view reaches
+ * before it meets something, and how open the spot is. Where a shot points is
+ * no longer inferred at all; it is the frame that was captured.
  */
 
 import type * as THREE from 'three';
 import {
   EMPHASIS_RANGE,
+  type CameraPose,
   type ShotAim,
   type PathStyle,
   type ShotType,
   type Vec3,
   type Waypoint,
 } from '@/lib/types';
+/* One definition of "which way does yaw/pitch point", shared with the gizmo
+   that draws it and the capture that records it. Everything else in this file
+   is deliberately three-free maths; this is a trig identity, not a dependency
+   on the renderer. */
+import { poseAxis } from '@/lib/pose';
 import {
   cellIndex,
   cellToWorld,
@@ -35,6 +54,7 @@ import {
   findNearestCell,
   floorYAtCell,
   isWalkable,
+  marchView,
   worldToCell,
   type WalkGrid,
 } from './grid';
@@ -53,9 +73,18 @@ export type StylePreset = {
    * sequence on the identical route and differed solely in how long it took.
    * A style is a way of covering a space, not a speed setting, so it chooses
    * the vocabulary and the geometry decides where each one applies.
+   *
+   * Three situations, not two, since a waypoint can now be captured in the air:
+   * a camera four metres up looking down is not "near a wall" or "on open
+   * floor", it is an establishing view, and every style has a different answer
+   * for one of those.
    */
-  nearWall: ShotType;
-  openFloor: ShotType;
+  /** The captured frame is close on its subject. */
+  nearSubject: ShotType;
+  /** The captured frame looks clear across the space. */
+  openView: ShotType;
+  /** The camera is well above the room, looking down on it. */
+  elevated: ShotType;
 };
 
 export const STYLE_PRESETS: Record<PathStyle, StylePreset> = {
@@ -66,38 +95,69 @@ export const STYLE_PRESETS: Record<PathStyle, StylePreset> = {
     // Not `hold` in the open: an all-hold style parks the camera at every
     // waypoint, which is the standstill problem this pipeline already had once.
     // Easing back off a subject reads warm and keeps the camera alive.
-    nearWall: 'push-in', openFloor: 'pull-back',
+    nearSubject: 'push-in', openView: 'pull-back', elevated: 'pull-back',
   },
   // Comprehensive. The job is to show the whole space clearly, so it sweeps
   // the open rooms and steps in on detail.
   realEstate: {
     metresPerSecond: 1.15, dwell: 0.9, intensity: 0.7,
-    nearWall: 'push-in', openFloor: 'pan',
+    // The reveal from height is this genre's signature shot, so the elevated
+    // slot is the one place realEstate reaches past a pan.
+    nearSubject: 'push-in', openView: 'pan', elevated: 'pull-back',
   },
   // Dramatic. Reaches for the moves that carry scale - around a subject in the
   // open, and up the face of whatever it is standing near.
   cinematic: {
     metresPerSecond: 0.62, dwell: 1.55, intensity: 1.0,
-    nearWall: 'rise', openFloor: 'orbit',
+    nearSubject: 'rise', openView: 'orbit', elevated: 'orbit',
   },
   // Efficient. Keeps travelling and does not stop to perform.
   quick: {
     metresPerSecond: 1.9, dwell: 0.55, intensity: 0.5,
-    nearWall: 'dolly-through', openFloor: 'dolly-through',
+    nearSubject: 'dolly-through', openView: 'dolly-through', elevated: 'dolly-through',
   },
 };
 
 /**
- * Where the auto rule crosses from "against a wall" to "out in the open".
+ * Where the auto rule crosses from "close on its subject" to "looking across
+ * the space".
  *
- * Deliberately the midpoint of a rank rather than a tuned constant: `openness`
- * is a waypoint's percentile within its own scene, so 0.5 means "the more
- * enclosed half of this room" in a flat and in a landscape alike.
+ * Deliberately the midpoint of a normalised quantity rather than a tuned
+ * distance in metres: `viewOpenness` is how far the captured view reaches as a
+ * share of the room's own footprint, so 0.5 means the same thing in a flat and
+ * in a landscape. See `viewOpennessOf`.
  */
-export const WALL_OPENNESS_CROSSOVER = 0.5;
+export const VIEW_OPENNESS_CROSSOVER = 0.5;
+
+/**
+ * How far a view has to reach, as a share of the room's footprint diagonal,
+ * before it counts as fully open.
+ *
+ * A third of the diagonal is about the length of the longest sightline an
+ * ordinary interior offers - across the living space and out of the far
+ * window - so a frame that reaches it is looking at the room rather than at a
+ * thing in it. Anything longer is still open; the measure saturates.
+ */
+export const VIEW_REACH_FRACTION = 0.35;
+
+/**
+ * When the camera counts as being ABOVE the room rather than in it.
+ *
+ * Expressed against the grid's own camera corridor, not in metres: `band.high`
+ * is where the walk grid stops caring about obstacles, so half again as high is
+ * "clear of everything a standing camera would have had to walk around" for
+ * whatever capture this is. The pitch condition is what separates an
+ * establishing view from a camera that merely happens to be up a staircase -
+ * looking straight ahead from a landing is not an aerial.
+ */
+export const ELEVATED_HEIGHT_FACTOR = 1.5;
+export const ELEVATED_PITCH = (-8 * Math.PI) / 180;
 
 /** Arc a pan sweeps when nobody has named one. Matches motion.ts AMPLITUDE. */
 export const DEFAULT_PAN_SWEEP = (75 * Math.PI) / 180;
+
+/** Arc an orbit swings when nobody has named one. Matches motion.ts AMPLITUDE. */
+export const DEFAULT_ORBIT_SWEEP = (110 * Math.PI) / 180;
 
 export type ShotIntent = {
   waypointId: string;
@@ -114,6 +174,10 @@ export type ShotIntent = {
   targetDistance: number;
   /** Metres from the waypoint to the nearest wall, per the walk grid. */
   wallDistance: number;
+  /** Metres along the captured view axis before it met something. */
+  subjectDistance: number;
+  /** Metres from the camera down to the floor beneath it. */
+  heightAboveFloor: number;
   /** Which end of the spectrum won the shotType. */
   source: 'auto' | 'manual';
   /** Applied move amplitude multiplier. */
@@ -131,6 +195,21 @@ export type ShotIntent = {
   aim: ShotAim;
   /** True when the sector came from the waypoint rather than being derived. */
   aimExplicit: boolean;
+  /**
+   * What the wall validator did to this shot.
+   *
+   * ONLY MEANINGFUL ON AN INTENT THAT CAME OUT OF `generatePath`. `resolveShot`
+   * runs before anything has been measured against the collider, so the value
+   * it returns is 'clear' in the sense of "not yet examined" - the panel is
+   * careful to read this off the generated shot and never off its own live
+   * preview, for the same reason it does with `shotType` (see WaypointPanel).
+   *
+   *   clear      the shot fits as authored
+   *   tightened  its amplitude was pulled in to miss the geometry
+   *   held       even motionless it clipped, so it became a hold
+   *   forced     it clips, and the waypoint asked for it anyway
+   */
+  wallFit: 'clear' | 'tightened' | 'held' | 'forced';
   /** Short human-readable justification, shown in the waypoint panel. */
   reason: string;
 };
@@ -160,6 +239,14 @@ export type RoomShape = {
   clearances: Float64Array;
   /** The clearance at which `openness` crosses 0.5, in metres. Reporting only. */
   medianClearance: number;
+  /**
+   * Footprint diagonal of the walkable region, in metres.
+   *
+   * The room's own yardstick, and what makes a view-distance rule scale-free:
+   * "reaches a third of the way across" means the same thing in a studio flat
+   * and in a 37 m landscape, where "reaches 6 m" does not.
+   */
+  span: number;
 };
 
 const shapeCache = new WeakMap<WalkGrid, RoomShape>();
@@ -197,7 +284,8 @@ export function roomShape(grid: WalkGrid): RoomShape {
   const centreFloorY = floorYAtCell(grid, cell.col, cell.row, bounds.min.y);
   const centre: Vec3 = [cx, centreFloorY + eyeOffset(grid), cz];
 
-  const shape: RoomShape = { bounds, centre, clearances, medianClearance };
+  const span = Math.hypot(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z);
+  const shape: RoomShape = { bounds, centre, clearances, medianClearance, span };
   shapeCache.set(grid, shape);
   return shape;
 }
@@ -315,39 +403,131 @@ export function readWall(grid: WalkGrid, position: Vec3): WallReading {
 }
 
 /* -------------------------------------------------------------------------- */
+/* the view reading                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the captured frame is actually looking at.
+ *
+ * The wall reading above describes where the camera STANDS. This describes what
+ * it is POINTED AT, which is the thing the user was choosing when they pressed
+ * the capture key, and it is what a shot should be built around: the same spot
+ * on the floor is a push-in when the camera is looking at the fireplace two
+ * metres away and a pan when it is looking out across the room.
+ */
+export type ViewReading = {
+  /** Metres along the view axis before it meets geometry, floor included. */
+  subjectDistance: number;
+  /** The point at that distance - what the shot frames. */
+  subjectPoint: Vec3;
+  /** False when the ray left the capture without meeting anything. */
+  hit: boolean;
+  /** Metres from the camera down to the floor beneath it. */
+  heightAboveFloor: number;
+  /**
+   * How far the view reaches as a share of the room's own footprint, saturated
+   * at 1. Dimensionless, so `VIEW_OPENNESS_CROSSOVER` travels between captures.
+   */
+  openness: number;
+  /** Camera well above the room AND pitched down: an establishing view. */
+  elevated: boolean;
+};
+
+/**
+ * Shortest subject distance the rule will report.
+ *
+ * A camera pressed against a wall marches zero metres, and a zero-length look
+ * vector has no direction at all - every shot then frames its own optical
+ * centre and the flythrough points at nothing. motion.ts holds the same floor
+ * for the same reason (AMPLITUDE.minTargetRadius); this one keeps the
+ * measurement honest before it ever gets there.
+ */
+const MIN_SUBJECT_DISTANCE = 0.5;
+
+export function readView(grid: WalkGrid, pose: CameraPose): ViewReading {
+  const shape = roomShape(grid);
+  const [x, y, z] = pose.position;
+  const axis = poseAxis(pose.yaw, pose.pitch);
+
+  // Half again the room's diagonal: far enough that a sightline down the long
+  // axis of any capture is measured rather than truncated, bounded so an
+  // unobstructed ray over open terrain still terminates.
+  const reach = Math.max(2, shape.span * 1.5);
+  const march = marchView(grid, { x, y, z }, axis, reach);
+  const subjectDistance = Math.max(MIN_SUBJECT_DISTANCE, march.distance);
+
+  const cell = worldToCell(grid, x, z);
+  const floorY = floorYAtCell(grid, cell.col, cell.row, grid.medianFloorY);
+
+  return {
+    subjectDistance,
+    subjectPoint: [
+      x + axis.x * subjectDistance,
+      y + axis.y * subjectDistance,
+      z + axis.z * subjectDistance,
+    ],
+    hit: march.hit,
+    heightAboveFloor: y - floorY,
+    openness: Math.min(1, subjectDistance / Math.max(1e-6, shape.span * VIEW_REACH_FRACTION)),
+    elevated:
+      y - floorY > grid.band.high * ELEVATED_HEIGHT_FACTOR && pose.pitch < ELEVATED_PITCH,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /* inference                                                                   */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Infer a shot from where the waypoint sits between the walls.
+ * Infer a shot from the frame that was captured.
  *
  * Geometric rather than semantic, for the same reason the old object rule was:
- * nothing here needs to know what the room contains, only its shape, so it
- * behaves the same on a capture we have never seen.
+ * nothing here needs to know what the room contains, only its shape and where
+ * the camera was pointed, so it behaves the same on a capture we have never
+ * seen.
+ *
+ * Three branches, in order of how much they override:
+ *   1. the camera is up above the room looking down - an establishing view,
+ *      whatever is in front of it;
+ *   2. its view meets something close - there is a subject, move on it;
+ *   3. its view runs clear across the space - there is no one subject, so the
+ *      shot is about the space.
+ *
+ * Only the LAST of these was expressible before waypoints carried a pose, which
+ * is why every open-floor stop got the same shot regardless of what it faced.
  */
 export function inferShotType(
-  reading: WallReading | null,
+  wall: WallReading | null,
+  view: ViewReading | null,
   preset: StylePreset,
 ): { shotType: ShotType; reason: string } {
-  if (!reading) {
+  if (!wall || !view) {
     // No grid yet - nothing measured, so do not invent a move.
-    return { shotType: 'hold', reason: 'no collider yet - holding in place' };
+    return { shotType: 'hold', reason: 'no collider yet - holding on the captured frame' };
   }
-  const metres = reading.clearance.toFixed(1);
-  if (reading.openness < WALL_OPENNESS_CROSSOVER && reading.wallPoint) {
+
+  if (view.elevated) {
     return {
-      shotType: preset.nearWall,
-      reason: `${metres} m from the nearest wall - ${VERB[preset.nearWall]}`,
+      shotType: preset.elevated,
+      reason:
+        `${view.heightAboveFloor.toFixed(1)} m up, looking down - ${VERB[preset.elevated]}`,
     };
   }
-  if (reading.openness < WALL_OPENNESS_CROSSOVER) {
-    // Close to something, but the grid cannot say which way. Holding is honest;
-    // moving in a direction we could not work out is not.
-    return { shotType: 'hold', reason: `tight spot (${metres} m clear) - hold` };
+
+  const metres = view.subjectDistance.toFixed(1);
+  if (view.openness < VIEW_OPENNESS_CROSSOVER) {
+    return {
+      shotType: preset.nearSubject,
+      reason: `${metres} m to what it frames - ${VERB[preset.nearSubject]}`,
+    };
   }
   return {
-    shotType: preset.openFloor,
-    reason: `open floor (${metres} m clear) - ${VERB[preset.openFloor]}`,
+    shotType: preset.openView,
+    // A ray that left the capture without hitting anything is describing sky,
+    // not a sightline, and saying "8.4 m ahead" of it would be a fabrication.
+    reason: view.hit
+      ? `clear view ${metres} m ahead - ${VERB[preset.openView]}`
+      : `nothing within ${metres} m ahead - ${VERB[preset.openView]}`,
   };
 }
 
@@ -362,10 +542,10 @@ const VERB: Record<ShotType, string> = {
   hold: 'hold on it',
 };
 
-/** Inferred shot length: the more open the stop, the longer the look. */
+/** Inferred shot length: the further the frame sees, the longer the look. */
 export function inferDuration(
   shotType: ShotType,
-  reading: WallReading | null,
+  view: ViewReading | null,
   preset: StylePreset,
 ): number {
   // Base seconds per shot type, before openness and style are applied.
@@ -379,7 +559,7 @@ export function inferDuration(
     hold: 2.0,
   };
 
-  const openness = reading ? reading.openness : 0.4;
+  const openness = view ? view.openness : 0.4;
   const openBonus = Math.min(2.4, openness * 2.4);
   const seconds = (base[shotType] + openBonus) * preset.dwell;
   return clamp(seconds, 0.8, 14);
@@ -394,15 +574,48 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /**
- * What a waypoint frames, now that it is a raw point rather than an object
- * reference: the wall it faces for a move that travels along the view axis,
- * the middle of the room for everything else.
+ * What a waypoint frames: whatever its own captured view lands on.
+ *
+ * This used to branch on shot type - the nearest wall for a move along the view
+ * axis, the middle of the room for everything else - because a floor dot gives
+ * nothing better to go on. Both answers were guesses, and the room-centre one
+ * was the reason a travelling camera would fix on a point behind it and
+ * moonwalk (see the note in generate.ts). A captured pose removes the guess:
+ * the user aimed at something, so that is the subject, for every shot type.
+ *
+ * Without a grid there is nothing to march against, so the target falls back to
+ * a point a few metres along the captured axis - still the right DIRECTION,
+ * only an invented distance.
  */
-function targetFor(shotType: ShotType, reading: WallReading | null, waypoint: Waypoint): Vec3 {
-  if (!reading) return [waypoint.position[0], waypoint.position[1], waypoint.position[2]];
-  const alongViewAxis = shotType === 'push-in' || shotType === 'pull-back';
-  if (alongViewAxis && reading.wallPoint) return reading.wallPoint;
-  return reading.centre;
+const BLIND_TARGET_DISTANCE = 3;
+
+function targetFor(view: ViewReading | null, waypoint: Waypoint): Vec3 {
+  if (view) return view.subjectPoint;
+  const axis = poseAxis(waypoint.yaw, waypoint.pitch);
+  return [
+    waypoint.position[0] + axis.x * BLIND_TARGET_DISTANCE,
+    waypoint.position[1] + axis.y * BLIND_TARGET_DISTANCE,
+    waypoint.position[2] + axis.z * BLIND_TARGET_DISTANCE,
+  ];
+}
+
+/**
+ * Which way an auto sweep runs: away from the nearest wall.
+ *
+ * A default sweep has to go one way or the other, and "always clockwise" is a
+ * coin toss that lands on a wall half the time - which is the one outcome a
+ * pan must not have, since its entire content is what it uncovers. The grid
+ * already knows which way the nearest surface is (`toWall`), so turning the
+ * other way is free and is right whenever it matters. When the wall is dead
+ * ahead or dead behind, both ways are equally good and the sign is arbitrary.
+ */
+function sweepDirection(yaw: number, wall: WallReading | null): number {
+  if (!wall?.toWall) return 1;
+  const wallBearing = Math.atan2(wall.toWall[2], wall.toWall[0]);
+  let delta = (wallBearing - yaw) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return delta > 0 ? -1 : 1;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -416,10 +629,11 @@ export function resolveShot(
   const preset = STYLE_PRESETS[style];
   const manual = waypoint.mode === 'manual';
 
-  const reading = grid ? readWall(grid, waypoint.position) : null;
-  const inferred = inferShotType(reading, preset);
+  const wall = grid ? readWall(grid, waypoint.position) : null;
+  const view = grid ? readView(grid, waypoint) : null;
+  const inferred = inferShotType(wall, view, preset);
   const autoShotType = inferred.shotType;
-  const autoDuration = inferDuration(autoShotType, reading, preset);
+  const autoDuration = inferDuration(autoShotType, view, preset);
 
   // No blending. The mode picks a source outright, so what the panel shows is
   // exactly what the camera does.
@@ -445,19 +659,36 @@ export function resolveShot(
     ? `you chose ${shotType} for ${duration.toFixed(1)}s${emphasisNote}`
     : `${inferred.reason}${emphasisNote}`;
 
-  const targetPoint = targetFor(shotType, reading, waypoint);
+  const targetPoint = targetFor(view, waypoint);
 
-  // Bearing the shot already looks along, and the arc it sweeps about it.
-  const bearing = Math.atan2(
-    targetPoint[2] - waypoint.position[2],
-    targetPoint[0] - waypoint.position[0],
-  );
-  // Not scaled by intensity: the dial owns the arc, move size owns distance.
-  const derivedSweep = DEFAULT_PAN_SWEEP;
-  const aim: ShotAim = waypoint.aim ?? {
-    from: bearing - derivedSweep / 2,
-    sweep: derivedSweep,
+  /* THE SHOT OPENS ON THE FRAME THAT WAS CAPTURED.
+   *
+   * `from` is the bearing a shot STARTS on - that is what the dial's handle is
+   * labelled and what motion.ts reads - so setting it to the captured yaw makes
+   * "press F on this frame" mean the flythrough actually passes through that
+   * frame. It is the one promise this whole feature rests on, and it is
+   * checkable: scripts/path-check.ts reports the angle between each waypoint's
+   * captured facing and its shot's first emitted frame.
+   *
+   * It used to be `bearing - sweep/2`, centring an arc on a target the
+   * generator had chosen for itself. Two things were wrong with that and only
+   * one of them was visible. The visible one: a pan opened 37.5 degrees to one
+   * side of what it framed. The other: shots that do not sweep at all - push-in,
+   * rise, dolly, hold - took `from` as their FACING, so they were aimed 37.5
+   * degrees off a target they had just computed, permanently, in every plan.
+   *
+   * `sweep` still differs per shot, because it is a different quantity for
+   * each: for a pan it is how far the view swings, for an orbit how far the
+   * CAMERA travels around the subject, and for the rest there is nothing to
+   * swing. Not scaled by intensity - the dial owns the arc, move size owns
+   * distance. */
+  const sweepSize =
+    shotType === 'pan' ? DEFAULT_PAN_SWEEP : shotType === 'orbit' ? DEFAULT_ORBIT_SWEEP : 0;
+  const derived: ShotAim = {
+    from: waypoint.yaw,
+    sweep: sweepSize * sweepDirection(waypoint.yaw, wall),
   };
+  const aim: ShotAim = waypoint.aim ?? derived;
   // Horizontal only: the target is lifted to eye height, and a shot that frames
   // the waypoint's own column must still read as "nothing to frame".
   const targetDistance = Math.hypot(
@@ -472,9 +703,14 @@ export function resolveShot(
     intensity,
     targetPoint,
     targetDistance,
-    wallDistance: reading?.clearance ?? 0,
+    wallDistance: wall?.clearance ?? 0,
+    subjectDistance: view?.subjectDistance ?? 0,
+    heightAboveFloor: view?.heightAboveFloor ?? 0,
     aim,
     aimExplicit: waypoint.aim !== null,
+    // Nothing has been measured against the collider yet; generatePath fills
+    // this in once fitShotToRoom has had its say.
+    wallFit: 'clear',
     source,
     emphasis,
     autoShotType,

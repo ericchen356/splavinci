@@ -1,8 +1,16 @@
 'use client';
 
 /**
- * Waypoint markers, the generated route, and each shot's aim sector, drawn
- * inside the room's scene graph.
+ * Waypoint cameras, the generated flight path, and each shot's aim sector,
+ * drawn inside the room's scene graph.
+ *
+ * A waypoint is a captured camera pose, so it is drawn as a camera: a frustum
+ * standing in the room, pointed the way it was pointed, sized by the field of
+ * view it was captured at. The same gizmo Blender uses, and for the same
+ * reason - it is the only mark that answers where, which way AND how much is in
+ * frame at once. What it replaced was a disc on the floor with a stem up to a
+ * nominal eye height, which could answer none of the three: it drew a standing
+ * position for something that is not standing, and pointed nowhere at all.
  *
  * Mounted as a child of RoomScene so it shares the room's coordinate space -
  * no second transform to keep in step. Reads the same waypoint list AND the
@@ -16,6 +24,7 @@ import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3, Waypoint } from '@/lib/types';
+import { poseQuaternion } from '@/lib/pose';
 import { useRoomStore } from '@/lib/scene/roomStore';
 import { isDrag } from '@/components/scene/pointer';
 import { alpha, theme } from '@/components/theme';
@@ -41,8 +50,6 @@ export type PlanOverlayProps = {
    */
   aims?: readonly WaypointAim[];
   onSelect?: (id: string) => void;
-  /** Camera height, so markers read at the height the camera will fly. */
-  cameraHeight?: number;
 };
 
 /* Colours come from the token block, not from three constants here. These
@@ -61,6 +68,29 @@ export type PlanOverlayProps = {
 /** Shared default: a fresh literal would rebuild the preview memo every render. */
 const NO_POINTS: readonly Vec3[] = [];
 const NO_AIMS: readonly WaypointAim[] = [];
+
+/* WHY EVERY MARK IN HERE CARRIES A renderOrder
+ *
+ * Nothing in this scene writes depth. The splat is an alpha-blended cloud, the
+ * collider wireframe and its pick surface both set `depthWrite: false`, and so
+ * do the annotations below - so `depthTest` decides nothing and the ONLY thing
+ * separating what is drawn over what is three's transparent sort, which orders
+ * by distance from the camera.
+ *
+ * That is why the overlay came and went as the room was flown around rather
+ * than failing outright: from an angle that put the cloud's sort key nearer
+ * than a gizmo, the cloud was painted afterwards and simply covered it. The
+ * badge was already pulled out of that sort; everything else has to be too, or
+ * a waypoint's number is legible while the camera it belongs to is not.
+ *
+ * Order among themselves still matters, and it is the reverse of importance:
+ * the sector is a wide wash that would swallow a route leg or a cage drawn
+ * under it, and the number has to survive whatever it lands on.
+ */
+const SECTOR_RENDER_ORDER = 996;
+const ROUTE_RENDER_ORDER = 997;
+const GIZMO_RENDER_ORDER = 998;
+const SPRITE_RENDER_ORDER = 1000;
 
 /* -------------------------------------------------------------------------- */
 /* the aim sector                                                              */
@@ -93,17 +123,6 @@ const SECTOR_REACH_OF_ROOM = 46 / 284;
 const SECTOR_REACH_MIN = 0.9;
 const SECTOR_REACH_MAX = 3.5;
 
-/**
- * Clear of the floor, and deliberately below the marker disc's 0.02 and the
- * route's 0.03.
- *
- * Those two are the answers to "which stop is this" and "where does the camera
- * go", and a sector is a wide flat shape that would swallow both if it sorted
- * above them. Small enough that it still reads as lying ON the floor rather
- * than hovering over it, which is the whole point of drawing it flat.
- */
-const SECTOR_LIFT = 0.012;
-
 /** Arc per fan segment, so a 20 degree wedge is not over-tessellated and a
  *  300 degree one is not visibly faceted. */
 const SECTOR_SEGMENT = Math.PI / 24;
@@ -135,14 +154,18 @@ export function PlanOverlay({
   shotPreview = NO_POINTS,
   aims = NO_AIMS,
   onSelect,
-  cameraHeight = 1.55,
 }: PlanOverlayProps) {
   const t = theme();
   const reach = useSectorReach();
+  const gizmoDepth = useGizmoDepth();
 
-  // Lift the route just clear of the floor; drawn coplanar it z-fights.
+  /* Drawn exactly where the camera flies - no lift, because there is no longer
+     a floor to z-fight with. The route used to be projected down onto the
+     collider and nudged 3 cm clear of it, which drew a PLAN of the flight
+     rather than the flight: a leg lifting over the balustrade and a leg
+     squeezing under it came out as the same line. */
   const routePoints = useMemo<THREE.Vector3[]>(
-    () => polyline.map((p) => new THREE.Vector3(p[0], p[1] + 0.03, p[2])),
+    () => polyline.map((p) => new THREE.Vector3(p[0], p[1], p[2])),
     [polyline],
   );
 
@@ -177,7 +200,16 @@ export function PlanOverlay({
       )}
 
       {routePoints.length > 1 && (
-        <Line points={routePoints} color={t.mapRoute} lineWidth={3} dashed={false} />
+        <Line
+          points={routePoints}
+          color={t.mapRoute}
+          lineWidth={3}
+          dashed={false}
+          transparent
+          depthWrite={false}
+          depthTest={false}
+          renderOrder={ROUTE_RENDER_ORDER}
+        />
       )}
 
       {previewPoints.length > 1 && (
@@ -188,16 +220,20 @@ export function PlanOverlay({
           dashed
           dashSize={0.14}
           gapSize={0.1}
+          transparent
+          depthWrite={false}
+          depthTest={false}
+          renderOrder={ROUTE_RENDER_ORDER}
         />
       )}
 
       {waypoints.map((w, i) => (
-        <WaypointMarker
+        <CameraGizmo
           key={w.id}
           waypoint={w}
           order={i + 1}
           selected={w.id === selectedId}
-          cameraHeight={cameraHeight}
+          depth={gizmoDepth}
           onSelect={onSelect}
         />
       ))}
@@ -206,7 +242,13 @@ export function PlanOverlay({
 }
 
 /**
- * One waypoint's aim, as a sector lying flat on the floor it is standing on.
+ * One waypoint's aim, as a horizontal sector at the camera's own height.
+ *
+ * It used to lie on the floor, because the waypoint did. A camera captured
+ * three metres up has no floor under it to annotate, and a wedge drawn down
+ * there would be describing a spot the shot never visits - so the sector sits
+ * in the plane the camera actually swings in, which is also the plane the sweep
+ * is measured in.
  *
  * WHY IT IS DRAWN AT ALL, GIVEN THE MAP ALREADY DRAWS IT
  * The map answers "which way does shot 3 point" in plan; it cannot answer
@@ -242,8 +284,8 @@ function AimSector({
   const shape = useAimShape(from, sweep, reach);
 
   return (
-    <group position={[position[0], position[1] + SECTOR_LIFT, position[2]]}>
-      <mesh geometry={shape.fan}>
+    <group position={[position[0], position[1], position[2]]}>
+      <mesh geometry={shape.fan} renderOrder={SECTOR_RENDER_ORDER}>
         <meshBasicMaterial
           color={t.mapAim}
           transparent
@@ -252,19 +294,11 @@ function AimSector({
              route leg disappearing behind one would be a lie about the
              plan. */
           depthWrite={false}
+          depthTest={false}
           /* The fan's winding flips with the sign of `sweep`, and a sector
-             is a two-sided annotation anyway - it has to survive the camera
-             dropping below the floor line of a capture with a step in it. */
+             floating at camera height is seen from below as often as from
+             above, so it has to be two-sided either way. */
           side={THREE.DoubleSide}
-          /* Belt and braces against the floor. SECTOR_LIFT is what clears
-             the splat, which is a cloud rather than a surface and does not
-             respond to a depth bias in any predictable way; the offset is
-             for the collider's floor triangles, which ARE a plane and which
-             12 mm can still lose to at a grazing angle on a far wall, where
-             the depth buffer has almost no precision left to spend. */
-          polygonOffset
-          polygonOffsetFactor={-1}
-          polygonOffsetUnits={-1}
         />
       </mesh>
       <Line
@@ -278,6 +312,8 @@ function AimSector({
         transparent
         opacity={SECTOR_EDGE}
         depthWrite={false}
+        depthTest={false}
+        renderOrder={SECTOR_RENDER_ORDER}
         dashed={false}
       />
     </group>
@@ -379,7 +415,7 @@ function useSectorReach(): number {
 }
 
 /**
- * Badge size in metres, as the sprite is drawn at the camera's own height.
+ * Badge size in metres, as the sprite is drawn out in the room.
  *
  * The unselected one is roughly a head's width at 3 m, which is the distance
  * this screen is usually flown at - big enough to read a two-digit number,
@@ -388,63 +424,158 @@ function useSectorReach(): number {
  * is what separates it at a glance; the two marker tokens are currently the
  * same blue, so colour alone cannot carry that.
  */
-/* Above anything the scene or Spark sets. The splat renders in the default
-   band, so one high value is enough and a second constant would only invite
-   the two to drift apart. */
-const SPRITE_RENDER_ORDER = 1000;
 
 const BADGE = 0.3;
 const BADGE_SELECTED = 0.4;
 
+/* -------------------------------------------------------------------------- */
+/* the camera gizmo                                                            */
+/* -------------------------------------------------------------------------- */
+
 /**
- * One waypoint marker. A component rather than inline JSX in the map, because
- * the order badge builds its texture through a hook - calling that inside a
- * loop would change the hook count whenever a waypoint is added or removed.
+ * How big a gizmo is, as a share of the capture's footprint diagonal.
+ *
+ * Metres would be wrong in one direction or the other: a readable camera in a
+ * flat is an invisible speck across a 37 m landscape, which is exactly where
+ * the user is furthest from what they placed. Bounded at both ends so a
+ * corridor capture does not get a gizmo smaller than its own badge, and a
+ * landscape does not get one the size of a shed.
+ *
+ * Sized to read as a piece of equipment standing in the room - about 20 cm of
+ * frustum in an ordinary flat. It is a mark ON the capture, not a thing IN it,
+ * and much past that it stops annotating the room and starts occupying it.
  */
-function WaypointMarker({
+const GIZMO_OF_ROOM = 0.019;
+const GIZMO_MIN = 0.16;
+const GIZMO_MAX = 0.85;
+
+/**
+ * The frame's aspect, for turning a vertical field of view into a rectangle.
+ *
+ * The viewport's real aspect changes with the window, and a gizmo that changed
+ * shape when the sidebar was resized would be reporting something about the
+ * browser rather than about the shot. 16:9 is what the flythrough is rendered
+ * at, which is the frame the user is actually planning.
+ */
+const GIZMO_ASPECT = 16 / 9;
+
+/** Up-triangle height, as a share of the frame's half-width. Blender's roughly. */
+const GIZMO_HAT = 0.55;
+
+/**
+ * The wireframe of a camera, in its own space, looking down -Z.
+ *
+ * -Z because that is where a three camera looks (see poseQuaternion), so the
+ * gizmo and any real camera dropped into this scene later share one rule about
+ * which way "forward" is.
+ *
+ * Returned as loose pairs for a segments line: one draw call for the whole
+ * cage, and no invented path connecting the pyramid to the hat.
+ */
+function cameraCage(depth: number, fovDegrees: number): THREE.Vector3[] {
+  const h = depth * Math.tan((Math.max(1, Math.min(170, fovDegrees)) * Math.PI) / 360);
+  const w = h * GIZMO_ASPECT;
+  const z = -depth;
+
+  const apex = new THREE.Vector3(0, 0, 0);
+  const tl = new THREE.Vector3(-w, h, z);
+  const tr = new THREE.Vector3(w, h, z);
+  const br = new THREE.Vector3(w, -h, z);
+  const bl = new THREE.Vector3(-w, -h, z);
+  // The hat sits on the top edge and is what says which way up the frame is -
+  // without it a pitched-down camera and a rolled one draw the same box.
+  const hatL = new THREE.Vector3(-w * 0.5, h, z);
+  const hatR = new THREE.Vector3(w * 0.5, h, z);
+  const hatTop = new THREE.Vector3(0, h + w * GIZMO_HAT, z);
+
+  const pairs: THREE.Vector3[][] = [
+    [apex, tl], [apex, tr], [apex, br], [apex, bl],
+    [tl, tr], [tr, br], [br, bl], [bl, tl],
+    [hatL, hatTop], [hatTop, hatR], [hatR, hatL],
+  ];
+  return pairs.flatMap(([a, b]) => [a.clone(), b.clone()]);
+}
+
+/**
+ * One waypoint, drawn as the camera it is.
+ *
+ * A component rather than inline JSX in the overlay, because the order badge
+ * builds its texture through a hook - calling that inside a loop would change
+ * the hook count whenever a waypoint is added or removed.
+ */
+function CameraGizmo({
   waypoint,
   order,
   selected,
-  cameraHeight,
+  depth,
   onSelect,
 }: {
   waypoint: Waypoint;
   order: number;
   selected: boolean;
-  cameraHeight: number;
+  depth: number;
   onSelect?: (id: string) => void;
 }) {
   const t = theme();
   const colour = selected ? t.markerSelected : t.marker;
   const badge = useOrderTexture(order, selected);
+  const size = selected ? depth * 1.25 : depth;
+
+  const quaternion = useMemo(
+    () => poseQuaternion(waypoint.yaw, waypoint.pitch),
+    [waypoint.yaw, waypoint.pitch],
+  );
+  const cage = useMemo(() => cameraCage(size, waypoint.fov), [size, waypoint.fov]);
+
   const pick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
-    // Releasing a look-around drag over a marker is not a request to select it.
+    // Releasing a look-around drag over a gizmo is not a request to select it.
     if (isDrag(e)) return;
     onSelect?.(waypoint.id);
   };
 
   return (
     <group position={[waypoint.position[0], waypoint.position[1], waypoint.position[2]]}>
-      {/* floor disc */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]} onClick={pick}>
-        <circleGeometry args={[selected ? 0.28 : 0.22, 24]} />
-        <meshBasicMaterial color={colour} transparent opacity={0.5} depthWrite={false} />
-      </mesh>
-      {/* stem up to camera height, so the marker reads in 3D */}
-      <mesh position={[0, cameraHeight / 2, 0]} onClick={pick}>
-        <cylinderGeometry args={[0.012, 0.012, cameraHeight, 8]} />
-        <meshBasicMaterial color={colour} transparent opacity={0.55} />
-      </mesh>
-      {/* The head, at camera height. The number IS the head: a sphere with a
-          badge floating above it was two marks for one fact, and the sphere
-          was the one that could not tell you which stop it was. Sprite rather
-          than a billboarded plane so it faces the camera without a frame of
-          rig code, and it takes the click itself - the thing you aim at is the
-          thing you can hit. */}
+      {/* Everything that has an orientation lives under the pose rotation. */}
+      <group quaternion={quaternion}>
+        <Line
+          points={cage}
+          segments
+          color={colour}
+          lineWidth={selected ? 2.5 : 1.6}
+          transparent
+          opacity={selected ? 0.95 : 0.62}
+          /* No depth write: the cage is an annotation drawn over a photoreal
+             cloud, and stamping its own hairlines into the depth buffer punches
+             holes in whatever the splat draws afterwards. */
+          depthWrite={false}
+          depthTest={false}
+          renderOrder={GIZMO_RENDER_ORDER}
+          dashed={false}
+        />
+        {/* The body, at the optical centre. It is the thing that makes the
+            gizmo hittable - four hairlines and a rectangle are almost
+            impossible to click - and it reads as the camera itself. */}
+        <mesh onClick={pick} renderOrder={GIZMO_RENDER_ORDER}>
+          <sphereGeometry args={[size * 0.16, 16, 12]} />
+          <meshBasicMaterial
+            color={colour}
+            transparent
+            opacity={0.9}
+            depthWrite={false}
+            depthTest={false}
+          />
+        </mesh>
+      </group>
+
+      {/* The number, held in WORLD up rather than under the pose rotation: a
+          camera pitched down to frame the floor would otherwise carry its own
+          label down with it and read upside-down from half the room. */}
       {badge && (
         <sprite
-          position={[0, cameraHeight, 0]}
+          /* Clear of the cage's own top edge, which at this size is roughly
+             three quarters of the frustum depth above the optical centre. */
+          position={[0, size + BADGE / 2, 0]}
           scale={selected ? [BADGE_SELECTED, BADGE_SELECTED, 1] : [BADGE, BADGE, 1]}
           onClick={pick}
           /* Drawn last, unconditionally.
@@ -466,6 +597,17 @@ function WaypointMarker({
       )}
     </group>
   );
+}
+
+/** Gizmo size in metres, from the capture's own footprint. See GIZMO_OF_ROOM. */
+function useGizmoDepth(): number {
+  const bounds = useRoomStore((s) => s.collider.data?.bounds ?? null);
+  return useMemo(() => {
+    if (!bounds) return GIZMO_MIN;
+    const diagonal = Math.hypot(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z);
+    const depth = diagonal * GIZMO_OF_ROOM;
+    return depth < GIZMO_MIN ? GIZMO_MIN : depth > GIZMO_MAX ? GIZMO_MAX : depth;
+  }, [bounds]);
 }
 
 /**

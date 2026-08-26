@@ -52,7 +52,32 @@ export type WalkGrid = {
   bounds: THREE.Box3;
   /** Camera corridor, as offsets above each cell's OWN floor height. */
   band: { low: number; high: number };
+  /**
+   * Obstacle occupancy as a bitmask of height slabs, one word per cell.
+   *
+   * The rest of this grid is 2D because a walking camera only ever asks about
+   * one height band. A FLYING camera does not: the whole point of a captured
+   * pose is that it can be four metres up, where the wall the 2D grid marks
+   * `blocked` is something to fly over rather than around. A single min/max
+   * span per cell cannot answer that - a reconstructed capture is a closed
+   * shell, so every cell's span runs floor to ceiling and everything reads as
+   * solid at every height, which is the same trap the band test documents
+   * below. Bits are set per TRIANGLE, so a wall occupies the slabs the wall is
+   * actually in and the air above it stays free.
+   *
+   * `SLAB_COUNT` slabs over the collider's own vertical extent, so the
+   * resolution follows the capture: about 9 cm on a flat, about a metre on a
+   * 30 m landscape. Spans are rounded OUTWARD, so the answer errs toward
+   * "occupied" and a path is never cleared through geometry the slab boundary
+   * happened to straddle.
+   */
+  obstacleSlabs: Uint32Array;
+  /** World Y of the bottom of slab 0, and the height of each slab. */
+  slabs: { minY: number; height: number };
 };
+
+/** Height slabs per cell. One Uint32 word, so 32 and not a tunable. */
+const SLAB_COUNT = 32;
 
 export type GridOptions = {
   /** Explicit cell size in world units. Derived from bounds when omitted. */
@@ -245,6 +270,15 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
   const blocked = new Uint8Array(count);
   const floor = new Uint8Array(count);
   const floorY = new Float32Array(count).fill(NaN);
+  const obstacleSlabs = new Uint32Array(count);
+
+  // The slab stack spans the collider's own vertical extent. A degenerate
+  // (perfectly flat) collider would give a zero height and divide by it, so the
+  // span has a floor of one millimetre.
+  const slabs = {
+    minY: bounds.min.y,
+    height: Math.max(1e-3, (bounds.max.y - bounds.min.y) / SLAB_COUNT),
+  };
 
   // The corridor is expressed as offsets above each cell's own floor, not as
   // absolute world heights - see the obstacle pass below for why.
@@ -312,6 +346,8 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
   rasterise(collider.obstacleGeometry, (i, triMinY, triMaxY) => {
     const base = Number.isNaN(floorY[i]) ? fallbackFloorY : floorY[i];
     if (triMaxY >= base + band.low && triMinY <= base + band.high) blocked[i] = 1;
+    // And, for the flying camera, which slabs this one triangle occupies.
+    obstacleSlabs[i] |= slabMask(slabs, triMinY, triMaxY);
   });
 
   // Close one cell: fills the interior of a solid wall whose side faces
@@ -365,7 +401,27 @@ export function buildWalkGrid(collider: ColliderData, options: GridOptions = {})
   return {
     cellSize, cols, rows, originX, originZ,
     blocked, floor, floorY, clearance, bounds, band, medianFloorY,
+    obstacleSlabs, slabs,
   };
+}
+
+/**
+ * Bits for every slab a world-space vertical span touches, rounded outward.
+ *
+ * A span entirely above or below the stack contributes nothing rather than
+ * clamping onto the end slab: geometry outside the collider's own bounds is
+ * geometry that cannot be there, and clamping would smear a stray triangle
+ * across the top of the whole capture.
+ */
+function slabMask(slabs: { minY: number; height: number }, minY: number, maxY: number): number {
+  const lo = Math.floor((minY - slabs.minY) / slabs.height);
+  const hi = Math.floor((maxY - slabs.minY) / slabs.height);
+  if (hi < 0 || lo > SLAB_COUNT - 1) return 0;
+  const from = lo < 0 ? 0 : lo;
+  const to = hi > SLAB_COUNT - 1 ? SLAB_COUNT - 1 : hi;
+  let mask = 0;
+  for (let s = from; s <= to; s++) mask |= 1 << s;
+  return mask;
 }
 
 function clampInt(v: number, lo: number, hi: number): number {
@@ -439,6 +495,163 @@ export function floorYAtCell(grid: WalkGrid, col: number, row: number, fallback:
   if (!inGrid(grid, col, row)) return fallback;
   const y = grid.floorY[cellIndex(grid, col, row)];
   return Number.isNaN(y) ? fallback : y;
+}
+
+/* -------------------------------------------------------------------------- */
+/* the flying camera                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where the camera body is sampled around its own centre, in radii.
+ *
+ * A camera is a sphere, and the grid answers in columns, so the honest test is
+ * "is any column the sphere overlaps occupied at the sphere's height". Centre
+ * plus eight compass points is that test to within a corner of a cell, and it
+ * is nine array reads - cheap enough to run at every sample of every curve,
+ * which is what the wall validator does.
+ */
+const BODY_RING = [
+  0, 0,
+  1, 0, -1, 0, 0, 1, 0, -1,
+  0.7071, 0.7071, -0.7071, 0.7071, 0.7071, -0.7071, -0.7071, -0.7071,
+];
+
+/** Slab bits covering a world-space vertical span. */
+function spanMask(grid: WalkGrid, minY: number, maxY: number): number {
+  return slabMask(grid.slabs, minY, maxY);
+}
+
+/**
+ * Can a camera of `radius` occupy this point in space?
+ *
+ * The 3D counterpart of `isPassable`, and the test every flight decision now
+ * goes through. Three ways to fail:
+ *   - outside the capture, which is not "clear", it is nothing;
+ *   - below the floor beneath it, which is inside the ground;
+ *   - overlapping obstacle geometry AT ITS OWN HEIGHT, which is the whole
+ *     point - a wall stops the camera at 1.6 m and not at 6 m.
+ *
+ * KNOWN LIMIT: `floorY` is the highest floor surface in a cell, so in a
+ * multi-storey capture the floor test measures against the upper storey. That
+ * assumption is already load-bearing elsewhere (medianFloorY, cameraYAt), and
+ * narrowing it here alone would only move the disagreement.
+ */
+export function isFreeAt(
+  grid: WalkGrid,
+  x: number, y: number, z: number,
+  radius: number,
+): boolean {
+  const r = radius > 0 ? radius : 0;
+  const mask = spanMask(grid, y - r, y + r);
+  for (let k = 0; k < BODY_RING.length; k += 2) {
+    const px = x + BODY_RING[k] * r;
+    const pz = z + BODY_RING[k + 1] * r;
+    const col = Math.floor((px - grid.bounds.min.x) / grid.cellSize);
+    const row = Math.floor((pz - grid.bounds.min.z) / grid.cellSize);
+    if (!inGrid(grid, col, row)) return false;
+    const i = cellIndex(grid, col, row);
+    const fy = grid.floorY[i];
+    if (!Number.isNaN(fy) && y - r < fy) return false;
+    if ((grid.obstacleSlabs[i] & mask) !== 0) return false;
+    // A radius of zero has nothing to sample around; one read is the answer.
+    if (r === 0) return true;
+  }
+  return true;
+}
+
+/** Probe sizes for `freeRadiusAt`, ascending. Metres. */
+const CLEARANCE_LADDER = [0.15, 0.3, 0.6, 1.2, 2.4, 4.8];
+
+/**
+ * Room to move at a point in space, in metres.
+ *
+ * The 2D `clearance` field is a distance to the nearest wall AT WALKING
+ * HEIGHT, which for a camera hovering over that same wall reports centimetres
+ * of room in the middle of open sky. Shots are scaled by this number, so
+ * reading it flat is the difference between an orbit and a twitch. A ladder of
+ * sphere tests is coarse, but it is coarse in the right dimension.
+ */
+export function freeRadiusAt(grid: WalkGrid, x: number, y: number, z: number): number {
+  let best = 0;
+  for (const r of CLEARANCE_LADDER) {
+    if (!isFreeAt(grid, x, y, z, r)) break;
+    best = r;
+  }
+  return best;
+}
+
+/**
+ * Is the straight line between two points flyable?
+ *
+ * Sampled at half a cell, which is the finest the grid can distinguish; a
+ * coarser step can pass a segment straight through a wall thinner than the
+ * step. Both endpoints are tested too - a leg that STARTS inside geometry is
+ * not a leg that can be flown, however clear the middle of it is.
+ */
+export function hasFlightPath(
+  grid: WalkGrid,
+  from: { x: number; y: number; z: number },
+  to: { x: number; y: number; z: number },
+  radius: number,
+): boolean {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const steps = Math.max(1, Math.ceil(length / Math.max(0.02, grid.cellSize * 0.5)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (!isFreeAt(grid, from.x + dx * t, from.y + dy * t, from.z + dz * t, radius)) return false;
+  }
+  return true;
+}
+
+/**
+ * March along a view ray until it meets something, and report how far.
+ *
+ * This is what a captured frame is ABOUT: the user pointed the camera at
+ * something, and the distance to it is the difference between "move in on that"
+ * and "sweep across all of that". Marched on the grid rather than raycast
+ * against the collider's triangles, because the grid is already in memory, is
+ * already what every other decision is made against, and answers in the tens of
+ * microseconds this can be called at - `resolveShot` runs on every tick of a
+ * slider drag.
+ *
+ * `hit` says whether the ray met something or simply ran out of capture, and
+ * the two have to be told apart: "there is a wall eight metres away" is a
+ * subject, "there is nothing out there at all" is sky. Leaving the grid is
+ * checked HERE rather than left to `isFreeAt`, which reports out-of-bounds as
+ * not-free - correct for asking whether a camera may be somewhere, and exactly
+ * backwards for asking whether a view is blocked.
+ */
+export function marchView(
+  grid: WalkGrid,
+  from: { x: number; y: number; z: number },
+  direction: { x: number; y: number; z: number },
+  maxDistance: number,
+): { distance: number; hit: boolean } {
+  const step = Math.max(0.02, grid.cellSize * 0.5);
+  const steps = Math.max(1, Math.ceil(maxDistance / step));
+  for (let i = 1; i <= steps; i++) {
+    const d = Math.min(maxDistance, i * step);
+    const x = from.x + direction.x * d;
+    const y = from.y + direction.y * d;
+    const z = from.z + direction.z * d;
+
+    const col = Math.floor((x - grid.bounds.min.x) / grid.cellSize);
+    const row = Math.floor((z - grid.bounds.min.z) / grid.cellSize);
+    if (!inGrid(grid, col, row) || y > grid.bounds.max.y) {
+      return { distance: Math.max(0, d - step), hit: false };
+    }
+
+    if (!isFreeAt(grid, x, y, z, 0)) {
+      // Back off to the last clear sample: the hit sample is INSIDE whatever
+      // was struck, and framing a point inside a wall puts the look target
+      // behind the surface the user was actually looking at.
+      return { distance: Math.max(0, d - step), hit: true };
+    }
+  }
+  return { distance: maxDistance, hit: false };
 }
 
 /**

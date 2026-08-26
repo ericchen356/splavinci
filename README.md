@@ -2,9 +2,15 @@
 
 Author a camera flythrough through a Gaussian-splat capture of a room.
 
-You pick a capture, drop waypoints in the 3D view or on the mini-map, choose a
-shot for each one, and the app plans a wall-aware camera path between them —
-then plays it back so you can scrub, comment and export.
+You pick a capture, fly the camera to a frame you like and press **F** to
+record it as a waypoint, choose a shot for each one, and the app plans a
+wall-aware camera path that flies between them — then plays it back so you can
+scrub, comment and export.
+
+A waypoint is the whole frame you captured: where the camera was, which way it
+was pointing, how far up, and how much it had in shot. So the path is a flight
+through the space rather than a route across the floor, and each waypoint is
+drawn where it stands as a camera you can see.
 
 Captures come from the [World Labs Marble](https://www.worldlabs.ai/) API: you
 give it photographs and a description of a layout, it returns a splat and a
@@ -24,7 +30,8 @@ npm run dev         # http://localhost:3000
 ```
 
 Then open <http://localhost:3000>, click **Sample room**, and you are on the
-plan screen.
+plan screen. Fly with `W A S D`, `Q`/`E` for down and up, drag to look, and
+press `F` to capture the frame you are looking at.
 
 ### Requirements
 

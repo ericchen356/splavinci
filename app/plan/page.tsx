@@ -1,12 +1,24 @@
 'use client';
 
 /**
- * The dual-view placement screen: a full 3D viewport with a mini-map in the
+ * The dual-view planning screen: a full 3D viewport with a mini-map in the
  * corner.
  *
- * Both views are projections of ONE waypoint list in the plan store. A click in
- * either drops into the same array and both re-render from it, so they cannot
- * disagree - there is no sync step because there is nothing to sync.
+ * HOW A WAYPOINT IS MADE
+ * You fly the camera to the frame you want and press F. The waypoint IS that
+ * frame - position, facing, pitch, field of view - so what you were looking at
+ * when you pressed the key is what the flythrough will show.
+ *
+ * It used to be a click on the collider's floor, which could only ever say
+ * WHERE, at a standing height nobody chose, facing a direction the generator
+ * then had to guess. Every hard problem downstream - what does this shot frame,
+ * which way does it point, why is the camera looking at the middle of the room
+ * again - was a consequence of throwing away four of the five numbers that make
+ * a shot at the moment the user was in the best position to give them.
+ *
+ * Both views are projections of ONE waypoint list in the plan store, and both
+ * re-render from it, so they cannot disagree - there is no sync step because
+ * there is nothing to sync.
  *
  * Pathfinding is not implemented here. This screen collects intent and calls
  * into lib/path, then draws whatever comes back.
@@ -27,17 +39,17 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { Canvas, type ThreeEvent } from '@react-three/fiber';
+import { Canvas } from '@react-three/fiber';
 import Link from 'next/link';
 import {
   CAMERA_BODY_RADIUS,
   CameraPresetDriver,
   CameraRig,
   CameraTracker,
+  PoseCapture,
   RoomScene,
   derivePresets,
-  isDrag,
-  type CameraPose,
+  type TrackedPose,
 } from '@/components/scene';
 import { MiniMap } from '@/components/plan/MiniMap';
 import { PlanOverlay } from '@/components/plan/PlanOverlay';
@@ -45,19 +57,10 @@ import { WaypointPanel, generatedShotFor } from '@/components/plan/WaypointPanel
 import { shotPreviewPoints } from '@/components/plan/shotPreview';
 import type { WaypointAim } from '@/components/plan/MiniMap';
 import { useRoomAssets } from '@/lib/scene';
-import {
-  cellIndex,
-  cellToWorld,
-  findNearestCell,
-  getWalkGrid,
-  resolveShot,
-  reachableMask,
-  resolveCameraRadius,
-  worldToCell,
-} from '@/lib/path';
+import { getWalkGrid, resolveShot, resolveCameraRadius } from '@/lib/path';
 import { ensureRendersLoaded } from '@/lib/assets';
 import { usePlanStore } from '@/lib/plan/planStore';
-import { PATH_STYLES, type PathStyle, type Vec3 } from '@/lib/types';
+import { PATH_STYLES, type CameraPose, type PathStyle, type Vec3 } from '@/lib/types';
 
 /* The style ids are camelCase because they are keys; the buttons were
    rendering them raw, so one of the four read "realEstate". */
@@ -138,7 +141,11 @@ export default function PlanPage() {
   } = usePlanStore();
 
   const [presetNonce, setPresetNonce] = useState(0);
-  const [pose, setPose] = useState<CameraPose | null>(null);
+  const [pose, setPose] = useState<TrackedPose | null>(null);
+  /* Bumped on every capture, and used only as a React key so the shutter flash
+     re-mounts and replays. A boolean would not: two captures in quick
+     succession are one state change, and the second would show nothing. */
+  const [shutter, setShutter] = useState(0);
 
   /* Read straight off the location rather than through useSearchParams, which
      would force this statically-rendered route under a Suspense boundary for a
@@ -206,64 +213,48 @@ export default function PlanPage() {
     return Math.max(3.2, Math.max(b.max.x - b.min.x, b.max.z - b.min.z) * 0.15);
   }, [assets.roomBounds]);
 
-  /* The camera's effective clearance, and the space it can actually reach at
-     that clearance. Both the map and waypoint placement need it: a waypoint
-     dropped in a pocket the camera cannot enter is not a plan, it is an error
-     message waiting to happen. */
-  const camera = useMemo(() => {
-    if (!grid) return null;
-    const resolved = resolveCameraRadius(grid, CAMERA_BODY_RADIUS);
-    return { ...resolved, reach: reachableMask(grid, resolved.radius) };
-  }, [grid]);
-
-  /* Pull a point into reachable space rather than refusing the click.
-     Refusing gives the user nothing to act on - the gap that cut the pocket off
-     is often a few centimetres and invisible at map scale - whereas landing on
-     the nearest spot the camera can occupy is almost always what was meant. */
-  const snapToReachable = useCallback(
-    (x: number, z: number): { x: number; z: number; moved: boolean } => {
-      if (!grid || !camera) return { x, z, moved: false };
-      const { col, row } = worldToCell(grid, x, z);
-      if (camera.reach.mask[cellIndex(grid, col, row)]) return { x, z, moved: false };
-      const near = findNearestCell(grid, col, row, (c, r) =>
-        camera.reach.mask[cellIndex(grid, c, r)] === 1);
-      if (!near) return { x, z, moved: false };
-      const w = cellToWorld(grid, near.col, near.row);
-      return { x: w.x, z: w.z, moved: true };
-    },
-    [grid, camera],
+  /* The camera's effective clearance, for the map's reachability shading. On a
+     derived collider the corridors are whatever the density threshold left, and
+     the default radius can shatter a real capture into pockets - the map is
+     where that is visible, so it needs the radius the generator will actually
+     use rather than the one that was asked for. */
+  const cameraRadius = useMemo(
+    () => (grid ? resolveCameraRadius(grid, CAMERA_BODY_RADIUS).radius : undefined),
+    [grid],
   );
 
-  /* Both entry points funnel into the same action. The only difference is where
-     y comes from: a 3D click already has a surface, a mini-map click does not. */
-  const dropAt3D = useCallback(
-    (point: Vec3, event: ThreeEvent<MouseEvent>) => {
-      // Looking around would otherwise drop a waypoint wherever the drag
-      // happened to end.
-      if (isDrag(event)) return;
-      const snapped = snapToReachable(point[0], point[2]);
-      addWaypoint([snapped.x, assets.floorYAtOr(snapped.x, snapped.z), snapped.z]);
+  /* THE ONLY WAY A WAYPOINT IS MADE.
+     No snapping, and nothing pulled onto the walkable grid: the pose is where
+     the camera IS, and a camera three metres up over a stairwell is not a
+     mistake to be corrected - it is the shot. Somewhere genuinely unusable is
+     reported by the generator, which is the stage that can say what is wrong
+     with it. */
+  const capture = useCallback(
+    (captured: CameraPose) => {
+      addWaypoint(captured);
+      setShutter((n) => n + 1);
     },
-    [addWaypoint, assets, snapToReachable],
+    [addWaypoint],
   );
 
-  const dropAtMap = useCallback(
-    (x: number, z: number) => {
-      const snapped = snapToReachable(x, z);
-      addWaypoint([snapped.x, assets.floorYAtOr(snapped.x, snapped.z), snapped.z]);
-    },
-    [addWaypoint, assets, snapToReachable],
-  );
+  /* Dragging a marker keeps its id, and with it its pose, mode, duration,
+     emphasis and place in the running order - all of which delete-and-replace
+     threw away. moveWaypoint pins it, so the generator rebuilds the two legs
+     either side and serves the rest of the table from cache.
 
-  /* Dragging a marker keeps its id, and with it its mode, duration, emphasis
-     and place in the running order - all of which delete-and-replace threw
-     away. moveWaypoint pins it, so the generator rebuilds the two legs either
-     side and serves the rest of the table from cache. */
+     The map is a plan, so a drag on it is a horizontal move: the camera keeps
+     its height ABOVE THE FLOOR rather than its absolute Y, which is the same
+     thing on a level floor and the difference between a camera and a buried one
+     on terrain. Facing is untouched - the map cannot express a turn, so it must
+     not silently perform one. */
   const dragOnMap = useCallback(
     (id: string, x: number, z: number) => {
-      moveWaypoint(id, [x, assets.floorYAtOr(x, z), z]);
+      const w = waypoints.find((p) => p.id === id);
+      if (!w) return;
+      const above = w.position[1] - assets.floorYAtOr(w.position[0], w.position[2]);
+      moveWaypoint(id, [x, assets.floorYAtOr(x, z) + above, z]);
     },
-    [moveWaypoint, assets],
+    [moveWaypoint, assets, waypoints],
   );
 
   const onGenerate = useCallback(() => {
@@ -308,7 +299,10 @@ export default function PlanPage() {
           <CameraRig moveSpeed={flySpeed} />
           <CameraPresetDriver preset={preset} nonce={presetNonce} />
           <CameraTracker onChange={setPose} />
-          <RoomScene onFloorClick={dropAt3D} showSplat={showSplat}>
+          {/* Inside the Canvas because the pose has to come off the LIVE
+              camera at the instant the key goes down - see PoseCapture. */}
+          <PoseCapture onCapture={capture} />
+          <RoomScene showSplat={showSplat}>
             <PlanOverlay
               waypoints={waypoints}
               selectedId={selectedId}
@@ -320,6 +314,24 @@ export default function PlanPage() {
           </RoomScene>
         </Canvas>
 
+        {/* The shutter. A capture is otherwise entirely silent - the waypoint
+            appears in a list in the corner and a gizmo appears where the camera
+            already is, which is behind the near clip plane and so invisible -
+            and a key that appears to do nothing gets pressed again. */}
+        {shutter > 0 && <div key={shutter} className="plan__shutter" aria-hidden="true" />}
+
+        {/* What the key is. Stated in full until the first waypoint exists,
+            because nothing else on this screen says how to make one; after that
+            it shrinks to the reminder it should have been all along. */}
+        <div className="plan__capture plan__over" data-full={waypoints.length === 0}>
+          <kbd className="plan__key">F</kbd>
+          <span>
+            {waypoints.length === 0
+              ? 'Fly to a frame you want, then press F to capture it as a waypoint'
+              : 'capture this frame'}
+          </span>
+        </div>
+
         {/* The map, and directly beneath it the two things you can turn off in
             the render. They belong here rather than in the sidebar because
             both are answers to "what am I looking at", which is a question
@@ -327,14 +339,13 @@ export default function PlanPage() {
         <div className="plan__corner">
           <MiniMap
             grid={grid}
-            cameraRadius={camera?.radius}
+            cameraRadius={cameraRadius}
             waypoints={waypoints}
             selectedId={selectedId}
             aims={aims}
             polyline={drawnPolyline}
             shotPreview={shotPreview}
             camera={pose}
-            onPick={dropAtMap}
             onWaypointPick={select}
             onWaypointDrag={dragOnMap}
             height={230}
@@ -462,8 +473,9 @@ export default function PlanPage() {
           />
         ) : (
           <p className="plan__empty">
-            Click the render or the map to drop a waypoint. Select one to set its
-            shot.
+            Fly with W A S D, Q and E, drag to look, and press F to capture the
+            frame you are looking at. Select a waypoint to set its shot; drag one
+            on the map to move it without changing where it points.
           </p>
         )}
       </aside>

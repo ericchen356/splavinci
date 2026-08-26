@@ -18,8 +18,9 @@ export {
 } from './CameraRig';
 export {
   CameraTracker,
-  type CameraPose,
+  type TrackedPose,
   type CameraTrackerProps,
 } from './CameraTracker';
+export { PoseCapture, type PoseCaptureProps } from './PoseCapture';
 export { CLICK_SLOP_PX, isDrag } from './pointer';
 export { AssetStatusPanel, type AssetStatusPanelProps } from './AssetStatusPanel';

@@ -25,6 +25,14 @@
  * see NumberField in AimDial.tsx for why the field commits on blur and Enter
  * rather than per keystroke.
  *
+ * WHEN THE COLLIDER IS WRONG
+ * The generator shrinks a shot that would clip and, failing that, holds. The
+ * collider is a reconstruction of the room and not a survey of it, so that
+ * verdict is sometimes about a wall that is not there - and until there was an
+ * override, the only way past it was to move the waypoint, which means changing
+ * the frame in order to argue with the mesh. `ignoreWalls` is that override, and
+ * it is offered exactly where the bad news is delivered.
+ *
  * WHAT THE RESOLVED SHOT LINE IS ALLOWED TO CLAIM
  * `resolveShot` runs before the generator measures the shot against the walls,
  * so on its own it is a proposal, not a report: `fitShotToRoom` may shrink the
@@ -39,11 +47,18 @@
  * live resolution and on the waypoint itself: a dial reporting a path generated
  * before the current edit would not respond to being dragged.
  *
+ * WHERE THE FACING COMES FROM
+ * The dial opens on the bearing the waypoint was CAPTURED at, not on one the
+ * generator inferred - a waypoint is a frame the user framed, and the shot is
+ * built to open on it. So `Auto` here means "the way I was pointing when I
+ * pressed the key", and Reset goes back to that rather than to a guess.
+ *
  * Screen-agnostic on purpose: the review screen reopens this same panel from
  * its technique label, and both screens hand the generated shot in rather than
  * having the panel reach into a store.
  */
 
+import { useEffect, useState } from 'react';
 import { AimDial, NumberField } from './AimDial';
 import { Icon } from '@/components/Icon';
 import {
@@ -119,6 +134,22 @@ export function WaypointPanel({
   // The waypoint as it stands right now. Every control edits this.
   const preview = resolveShot(waypoint, grid, style);
   const shown = generated ?? preview;
+  const wallFit = generated?.wallFit ?? 'clear';
+
+  /* THE WALL OVERRIDE HAS TO OUTLIVE THE NEWS THAT PROMPTED IT.
+   *
+   * `generated` is withheld the moment the plan is edited - correct, because a
+   * shot from before the edit is not a report about the plan as it stands. But
+   * toggling this very control IS an edit, so a control shown only while a
+   * clip is currently reported would disappear on its own first click, leaving
+   * no way to change one's mind short of regenerating. So once a waypoint's
+   * shot has been reported as clipping, the escape hatch stays on screen for
+   * it. Keyed by id because the panel instance is reused across selections. */
+  const [offeredFor, setOfferedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (wallFit !== 'clear') setOfferedFor(waypoint.id);
+  }, [wallFit, waypoint.id]);
+  const showWallOverride = waypoint.ignoreWalls || offeredFor === waypoint.id;
   // What was asked for before the walls had their say: a manual waypoint names
   // its own shot, auto's ask is the type it inferred. Both survive the fit, so
   // this stays readable off the generated intent itself.
@@ -204,14 +235,51 @@ export function WaypointPanel({
           <span className="insp__resolved-for"> for </span>
           <strong className="num">{shown.duration.toFixed(1)}s</strong>
         </p>
-        {generated && clipped && (
-          <p className="insp__clipped" title={clipped.message}>
-            {replaced
-              ? `${askedFor} clips a wall — ${shown.shotType} instead`
-              : 'tightened to clear the walls'}
+        {wallFit !== 'clear' && (
+          <p className="insp__clipped" data-fit={wallFit} title={clipped?.message}>
+            {wallFit === 'forced'
+              ? 'clips the collider — performed as you asked'
+              : replaced
+                ? `${askedFor} clips a wall — ${shown.shotType} instead`
+                : 'tightened to clear the walls'}
           </p>
         )}
       </div>
+
+      {/* ---- and what to do when the collider is wrong about it ---- */}
+      {showWallOverride && (
+        <div className="insp__field">
+          <div className="insp__label">
+            <span className="insp__label-name">Walls</span>
+            <span className="insp__label-note">
+              {waypoint.ignoreWalls ? 'ignoring the collider' : 'the collider decides'}
+            </span>
+          </div>
+          <div className="insp__choices" role="group" aria-label="What to do where this shot clips">
+            <button
+              type="button"
+              className="insp__choice"
+              aria-pressed={!waypoint.ignoreWalls}
+              onClick={() => onChange({ ignoreWalls: false })}
+            >
+              Fit the shot
+            </button>
+            <button
+              type="button"
+              className="insp__choice"
+              aria-pressed={waypoint.ignoreWalls}
+              onClick={() => onChange({ ignoreWalls: true })}
+            >
+              Perform anyway
+            </button>
+          </div>
+          <p className="insp__hint">
+            The collision mesh is reconstructed from photographs, so it invents
+            walls the room does not have. Perform anyway keeps the shot exactly
+            as authored; the clip is still measured and reported.
+          </p>
+        </div>
+      )}
 
       {/* ---- who decides ---- */}
       <div className="insp__field">
@@ -298,7 +366,9 @@ export function WaypointPanel({
       <div className="insp__field">
         <div className="insp__label">
           <span className="insp__label-name">{sweeps ? 'Sweep' : 'Facing'}</span>
-          <span className="insp__label-note">{preview.aimExplicit ? 'set by you' : 'auto'}</span>
+          <span className="insp__label-note">
+            {preview.aimExplicit ? 'set by you' : 'as captured'}
+          </span>
         </div>
         <AimDial
           aim={preview.aim}

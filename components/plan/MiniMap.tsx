@@ -9,8 +9,14 @@
  * the router does not believe in.
  *
  * Shared by both screens rather than duplicated: the plan screen passes
- * waypoints and takes clicks, the review screen passes a camera pose and
- * comments. Everything is optional, so each screen lights up only what it uses.
+ * waypoints and lets them be dragged, the review screen passes a camera pose
+ * and takes clicks to place comments. Everything is optional, so each screen
+ * lights up only what it uses.
+ *
+ * `onPick` - a click on empty floor - is one the plan screen no longer supplies.
+ * A waypoint is a captured camera pose, and a click on a plan can only ever
+ * name two of its five numbers; the map's job there is now to SHOW the plan and
+ * to let a waypoint be slid horizontally, not to author one.
  *
  * INTERACTION
  * Everything runs off pointer events, not `click`, for two reasons. A `click`

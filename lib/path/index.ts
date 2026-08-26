@@ -12,6 +12,8 @@ export {
   cellIndex, cellToWorld, worldToCell, inGrid,
   isWalkable, isPassable, findNearestCell, floorYAtCell, hasLineOfSight, denseBounds,
   passableConnectivity, cachedConnectivity, resolveCameraRadius, reachableMask,
+  /* the flying camera: the 3D counterparts of isPassable/hasLineOfSight */
+  isFreeAt, freeRadiusAt, hasFlightPath, marchView,
   type WalkGrid, type GridOptions,
 } from './grid';
 
@@ -24,14 +26,18 @@ export {
 
 export {
   buildCurve, cellsToWorldPoints, countViolations,
-  easeInOut, easeInOutCubic, sampleCurveEased, segmentEase, hermiteRate, DEFAULT_CURVE,
-  type BuiltCurve, type CurveOptions,
+  easeInOut, easeInOutCubic, sampleCurveEased, segmentEase, hermiteRate,
+  DEFAULT_CURVE, DEFAULT_CAMERA_HEIGHT,
+  type BuiltCurve, type CurveOptions, type HeightProfile,
 } from './curve';
 
 export {
-  resolveShot, inferShotType, inferDuration, readWall, roomShape,
-  STYLE_PRESETS, WALL_OPENNESS_CROSSOVER, DEFAULT_PAN_SWEEP,
-  type ShotIntent, type RoomShape, type StylePreset, type WallReading,
+  resolveShot, inferShotType, inferDuration, readWall, readView, roomShape,
+  STYLE_PRESETS, VIEW_OPENNESS_CROSSOVER, VIEW_REACH_FRACTION,
+  ELEVATED_HEIGHT_FACTOR, ELEVATED_PITCH,
+  DEFAULT_PAN_SWEEP, DEFAULT_ORBIT_SWEEP,
+  type ShotIntent, type RoomShape, type StylePreset,
+  type WallReading, type ViewReading,
 } from './shots';
 
 export { sampleShot, sampleShotEased, type ShotContext, type CameraSample } from './motion';

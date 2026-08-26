@@ -37,8 +37,10 @@ import {
   cellIndex,
   cellToWorld,
   createPathCache,
+  floorYAtCell,
   generatePath,
   gridStats,
+  isFreeAt,
   reachableMask,
   resolveCameraRadius,
   worldToCell,
@@ -49,6 +51,7 @@ import { verifyColliderWithLoader } from '@/lib/marble/verify';
 import type { Vec3, Waypoint } from '@/lib/types';
 
 import { readSpz } from './lib/spz-read.mjs';
+import { poseWaypoints } from './path-lab';
 
 /* -------------------------------------------------------------------------- */
 /* constants                                                                  */
@@ -93,16 +96,27 @@ type SplatField = {
 /**
  * Read the splat and put it in world space.
  *
- * readSpz's `flipYDown` already performs the 180 degree turn about X that the
- * placement's rotation asks for, so only the scale and the ground offset are
- * left to apply. Anything fainter than MIN_OPACITY is dropped here rather than
- * at every use site: a floater haze answers "is there something here" yes and
- * "can you see it" no, and every question below means the second one.
+ * The placement's own rotation is applied, exactly as SplatLayer applies it to
+ * the mesh - NOT readSpz's `flipYDown`, which would hardcode one convention.
+ * Most captures come off the Marble API in the raw Y-down frame and carry the
+ * 180 degree turn about X, so for them the two are the same thing; a capture
+ * downloaded from the Marble web app arrives already Y-up and carries an
+ * identity rotation, and flipping that one anyway stands it on its head
+ * against a collider that was not flipped. Floor support and enclosure are
+ * exactly the measurements that would then report a sound capture as rubble.
+ *
+ * Anything fainter than MIN_OPACITY is dropped here rather than at every use
+ * site: a floater haze answers "is there something here" yes and "can you see
+ * it" no, and every question below means the second one.
  */
 async function readSplatField(path: string, placement: Placement): Promise<SplatField> {
-  const spz = await readSpz(path, { flipYDown: true });
+  const spz = await readSpz(path, { flipYDown: false });
   const s = placement.scale;
   const [ox, oy, oz] = placement.position;
+  const basis = new THREE.Matrix4().makeRotationFromEuler(
+    new THREE.Euler(placement.rotation[0], placement.rotation[1], placement.rotation[2]),
+  );
+  const point = new THREE.Vector3();
 
   const x = new Float32Array(spz.n);
   const y = new Float32Array(spz.n);
@@ -114,9 +128,10 @@ async function readSplatField(path: string, placement: Placement): Promise<Splat
 
   for (let i = 0; i < spz.n; i++) {
     if (spz.A[i] < MIN_OPACITY) continue;
-    const wx = ox + s * spz.X[i];
-    const wy = oy + s * spz.Y[i];
-    const wz = oz + s * spz.Z[i];
+    point.set(spz.X[i], spz.Y[i], spz.Z[i]).applyMatrix4(basis);
+    const wx = ox + s * point.x;
+    const wy = oy + s * point.y;
+    const wz = oz + s * point.z;
     x[kept] = wx;
     y[kept] = wy;
     z[kept] = wz;
@@ -564,16 +579,9 @@ out(`reachable        largest region ${reachable} cells  ${m2(reachable * cellAr
 if (spots.length < 2) {
   out('waypoints        FEWER THAN 2 REACHABLE SPOTS - no path can be generated');
 } else {
-  const waypoints: Waypoint[] = spots.map((p, i) => ({
-    id: `w${i + 1}`,
-    position: p,
-    shotType: 'orbit',
-    mode: 'auto',
-    duration: 4,
-    emphasis: 1,
-    aim: null,
-    pinned: false,
-  }));
+  /* Poses, not floor points: the pipeline takes captured cameras now, and a
+     waypoint built the old way would sit the camera on the floor. */
+  const waypoints: Waypoint[] = poseWaypoints(grid, spots);
   const path = generatePath(
     { collider, waypoints, settings: { style: 'realEstate' } },
     createPathCache(),
@@ -582,19 +590,38 @@ if (spots.length < 2) {
   let insideSolid = 0;
   let inOccupied = 0;
   let offFloor = 0;
+  let unflyable = 0;
+  let lowest = Infinity;
+  let highest = -Infinity;
   for (const frame of path.frames) {
     const d = densityAt(volume, frame.position[0], frame.position[1], frame.position[2]);
     if (d >= volume.solid) insideSolid++;
     else if (d > 0) inOccupied++;
     const { col, row } = worldToCell(grid, frame.position[0], frame.position[2]);
     if (!grid.floor[cellIndex(grid, col, row)]) offFloor++;
+    /* The question the 2D checks above cannot ask now that the camera flies:
+       could its body actually be at this point in space? A frame over a cell
+       with no floor is a camera over a stairwell, which is fine; a frame the
+       body cannot occupy is a camera inside something, which is not. */
+    if (!isFreeAt(grid, frame.position[0], frame.position[1], frame.position[2], radius)) {
+      unflyable++;
+    }
+    const above = frame.position[1] -
+      floorYAtCell(grid, col, row, grid.medianFloorY);
+    if (above < lowest) lowest = above;
+    if (above > highest) highest = above;
   }
 
   out(`waypoints        ${waypoints.length} spread over the reachable region`);
   out(`path             ${path.frames.length} frames, ${path.duration}s @ ${path.fps} fps, ${path.segments.length} segments`);
   out(`shots            ${path.shots.map((s) => s.shotType).join(', ')}`);
+  out(`legs             ${path.stats.directLegs} flown direct, ${path.stats.routedLegs} routed around geometry`);
   out(`frames in solid  ${insideSolid} (${pct(insideSolid / path.frames.length)})  merely occupied ${inOccupied} (${pct(inOccupied / path.frames.length)})`);
-  out(`frames off floor ${offFloor} (${pct(offFloor / path.frames.length)})`);
+  out(`frames over void ${offFloor} (${pct(offFloor / path.frames.length)})  ` +
+      `- no floor under them, which a flying camera is allowed`);
+  out(`frames unflyable ${unflyable} (${pct(unflyable / path.frames.length)})  ` +
+      `- camera body could not be there at all`);
+  out(`camera height    ${lowest.toFixed(2)}..${highest.toFixed(2)} m above the floor beneath it`);
   out(`warnings         ${path.warnings.length}`);
   for (const w of path.warnings) out(`  [${w.severity}] ${w.code}: ${w.message}`);
 
@@ -606,7 +633,12 @@ if (spots.length < 2) {
       collider: { bytes: colliderBytes.byteLength, triangles: loader.triangles, meshes: inspection.meshCount },
       grid: { ...stats, cellSize: grid.cellSize, cols: grid.cols, rows: grid.rows },
       coverage,
-      routing: { frames: path.frames.length, duration: path.duration, insideSolid, offFloor, warnings: path.warnings.map((w) => w.code) },
+      routing: {
+        frames: path.frames.length, duration: path.duration,
+        insideSolid, offFloor, unflyable,
+        directLegs: path.stats.directLegs, routedLegs: path.stats.routedLegs,
+        warnings: path.warnings.map((w) => w.code),
+      },
     }));
   }
 }

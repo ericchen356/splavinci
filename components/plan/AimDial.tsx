@@ -406,7 +406,7 @@ export function AimDial({ aim, sweeps, explicit, onChange, onReset, size = 116 }
           className="btn btn--sm dial__auto"
           onClick={onReset}
           disabled={!explicit}
-          title="Go back to the bearing the generator infers from the room."
+          title="Go back to the facing this waypoint was captured at."
         >
           Auto
         </button>

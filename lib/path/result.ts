@@ -52,6 +52,17 @@ export type PathStats = {
   cellSize: number;
   recomputedSegments: number;
   reusedSegments: number;
+  /**
+   * Legs the camera flew as a straight line through space, and legs it had to
+   * be routed around something for.
+   *
+   * Worth reporting because it is the difference between the two things this
+   * pipeline can produce and nothing else in the output distinguishes them: a
+   * path of all-direct legs is a camera moving through a space, a path of
+   * all-routed legs is a camera being walked around one.
+   */
+  directLegs: number;
+  routedLegs: number;
   /** Frames whose view rotation hit the turn-rate ceiling. */
   turnRateClampedFrames: number;
   /** Milliseconds spent in generation, excluding grid construction. */
@@ -84,7 +95,8 @@ export const EMPTY_PATH: PathResult = {
   warnings: [],
   stats: {
     gridCols: 0, gridRows: 0, cellSize: 0,
-    recomputedSegments: 0, reusedSegments: 0, turnRateClampedFrames: 0,
+    recomputedSegments: 0, reusedSegments: 0, directLegs: 0, routedLegs: 0,
+    turnRateClampedFrames: 0,
     generateMs: 0, gridMs: 0,
   },
 };

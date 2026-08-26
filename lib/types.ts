@@ -33,14 +33,51 @@ export const SHOT_TYPES: readonly ShotType[] = [
 /** Who decides a waypoint's shot. */
 export type WaypointMode = 'auto' | 'manual';
 
+/**
+ * A camera pose, exactly as it stood when it was captured.
+ *
+ * Bearings use the same convention as `ShotAim.from` - `Math.atan2(dz, dx)` -
+ * so a captured facing can be handed straight to a shot's aim without a
+ * conversion step that only one of the two call sites would remember to apply.
+ * Pitch is the elevation of the view direction, positive looking up.
+ *
+ * Stored as yaw/pitch rather than as a quaternion or a look-at point. A
+ * quaternion carries a roll this app has no way to author and no way to show;
+ * a look-at point is a position plus a distance, and the distance is a fiction
+ * that would then have to survive every edit to the position.
+ */
+export type CameraPose = {
+  position: Vec3;
+  /** Radians, atan2(dz, dx). */
+  yaw: number;
+  /** Radians, positive looking up. */
+  pitch: number;
+  /** Vertical field of view in degrees, as the viewport had it. */
+  fov: number;
+};
+
 /** A stop the camera visits, in list order.
  *
- *  `position` is the raw 3D point the user clicked on the splat - there are no
- *  individually meshed objects to reference, so what a waypoint frames is
- *  derived from the room's own geometry (see lib/path/shots.ts). */
+ *  A waypoint IS a camera pose - the frame the user was looking at when they
+ *  pressed the capture key - not a point on the floor. That is the whole
+ *  difference between "go and stand there" and "put the camera here, like
+ *  this": height and facing are authored rather than inferred, and the shot
+ *  the generator builds starts from a frame the user has already seen.
+ *
+ *  What the pose FRAMES is still derived from the room's own geometry - there
+ *  are no individually meshed objects to reference - but it is now measured
+ *  along the captured view axis rather than guessed from where the waypoint
+ *  stands (see lib/path/shots.ts). */
 export type Waypoint = {
   id: string;
+  /** Where the camera is. In the air, on a balcony, anywhere it was flown. */
   position: Vec3;
+  /** Facing, radians, atan2(dz, dx). Matches `ShotAim.from`. */
+  yaw: number;
+  /** Elevation of the view, radians, positive looking up. */
+  pitch: number;
+  /** Vertical field of view in degrees, so the 3D gizmo draws the real frame. */
+  fov: number;
   /**
    * Who decides this waypoint's shot.
    *
@@ -64,13 +101,30 @@ export type Waypoint = {
    */
   emphasis: number;
   /**
-   * Where this shot points. Null lets the generator choose.
+   * Where this shot points. Null takes the captured facing.
    *
    * Authoritative when set, and deliberately not scaled by emphasis: naming an
    * arc IS the amplitude, and a second control quietly shrinking it would
    * reproduce exactly the problem the auto/manual blend had.
    */
   aim: ShotAim | null;
+  /**
+   * Perform this shot as authored even where the collider says it clips.
+   *
+   * The wall validator shrinks a shot that would pass through geometry and,
+   * where even a motionless camera clips, replaces it with a hold. That is the
+   * right default and it is wrong often enough to need an override: a collider
+   * is a reconstruction, not a measurement, and a capture routinely carries a
+   * phantom slab across a doorway or reads a curtain as masonry. Without this
+   * the only remedy for a shot the mesh disagrees with was to move the
+   * waypoint - which changes the frame the user captured in order to work
+   * around a wall that is not there.
+   *
+   * The clip is still MEASURED and still reported when this is set; what
+   * changes is that the shot is not altered. Nothing here is guesswork the
+   * user cannot see.
+   */
+  ignoreWalls: boolean;
   /** True once the user has dragged or edited this waypoint; marks it and its
    *  immediate neighbours for targeted recompute instead of a full rebuild. */
   pinned: boolean;

@@ -22,23 +22,40 @@
  * Anything ambiguous - two waypoints with no walkable route between them, a
  * waypoint dropped inside a wall, an orbit that would clip - is reported in
  * `warnings` rather than silently producing a broken path.
+ *
+ * THE CAMERA FLIES; IT DOES NOT WALK
+ * A waypoint is a captured camera pose, so a leg is a flight between two points
+ * in space and not a route across the floor. Every leg is offered the straight
+ * line first (`hasFlightPath`), which is what the camera would actually do -
+ * over the sofa, out through the double-height void, down from the aerial - and
+ * only when something solid is genuinely in the way does it fall back to
+ * routing horizontally with A*. Even then the curve carries the heights the two
+ * poses were captured at rather than being pinned to floor-plus-eye-height.
+ *
+ * That is a change of substance, not of presentation. The old pipeline could
+ * only ever emit a path lying on the walkable surface, so a waypoint the user
+ * had flown up to was silently brought back down to standing height before
+ * anything was drawn.
  */
 
 import * as THREE from 'three';
 import type { FrameEntry, PathSettings, ShotType, Vec3, Waypoint } from '@/lib/types';
 import type { ColliderData } from '@/lib/scene/collider';
 import {
-  cellIndex,
   floorYAtCell,
+  freeRadiusAt,
+  hasFlightPath,
+  isFreeAt,
   worldToCell,
-  isPassable,
   type GridOptions,
   type WalkGrid,
 } from './grid';
 import { getWalkGrid } from './gridCache';
 import { resolveCameraRadius } from './grid';
-import { findPath, simplifyPath, type Cell } from './astar';
-import { buildCurve, easeInOut, hermiteRate, DEFAULT_CURVE } from './curve';
+import { findPath, type Cell } from './astar';
+import {
+  buildCurve, countViolations, hermiteRate, DEFAULT_CURVE, type HeightProfile,
+} from './curve';
 import { sampleShot, vec3, type ShotContext } from './motion';
 import { resolveShot, STYLE_PRESETS, type ShotIntent } from './shots';
 import {
@@ -51,8 +68,15 @@ import {
 
 export type GenerateOptions = {
   fps: number;
-  /** Camera height above the floor. */
-  cameraHeight: number;
+  /**
+   * Least distance a routed leg keeps between the camera and the floor.
+   *
+   * Replaces the old `cameraHeight`, which was the height every path flew at
+   * because every waypoint was a floor point. Heights now come from the poses
+   * that were captured; this is only the guard that stops a leg between two
+   * low waypoints scraping along a rising floor between them.
+   */
+  floorClearance: number;
   /** Camera body radius; gates pathfinding and shot validation. */
   radius: number;
   /** Ceiling on how fast the view may rotate. A brisk whip pan, not a cut. */
@@ -62,7 +86,7 @@ export type GenerateOptions = {
 
 export const DEFAULT_GENERATE: GenerateOptions = {
   fps: 30,
-  cameraHeight: DEFAULT_CURVE.cameraHeight,
+  floorClearance: 0.6,
   radius: DEFAULT_CURVE.radius,
   // A whip pan is 200+ deg/s; a smooth operated pan is 10-40. The old ceiling
   // was so high that it never shaped anything - measured, the 95th percentile
@@ -102,18 +126,6 @@ export function createPathCache(): PathCache {
 function round(n: number, places = 3): number {
   const f = 10 ** places;
   return Math.round(n * f) / f;
-}
-
-function waypointKey(w: Waypoint): string {
-  return [
-    w.id,
-    w.position.map((v) => round(v)).join(','),
-    w.mode,
-    w.shotType,
-    round(w.duration, 2),
-    round(w.emphasis, 3),
-    w.aim ? `${round(w.aim.from, 4)}:${round(w.aim.sweep, 4)}` : '-',
-  ].join('|');
 }
 
 function positionKey(w: Waypoint | undefined): string {
@@ -216,6 +228,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   let recomputed = 0;
   let reused = 0;
 
+
   for (let i = 0; i < waypoints.length - 1; i++) {
     const a = waypoints[i];
     const b = waypoints[i + 1];
@@ -227,7 +240,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     // the key only needs to describe the geometry.
     const key = [
       'travel', a.id, b.id, positionKey(a), positionKey(b),
-      input.settings.style, round(radius, 3), round(opts.cameraHeight, 3),
+      input.settings.style, round(radius, 3), round(opts.floorClearance, 3),
     ].join('|');
 
     const hit = cache.legs.get(key);
@@ -292,22 +305,20 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     time += duration;
   };
 
-  // A waypoint's stored position is a point on the FLOOR (that is what a
-  // mini-map click means), so the camera anchor is lifted to eye height.
-  // Without this the camera would sink to the floor at every waypoint and pop
-  // back up for each travel leg.
-  const clearanceAt = (position: Vec3): number => {
-    const { col, row } = worldToCell(grid, position[0], position[2]);
-    const value = grid.clearance[cellIndex(grid, col, row)];
-    return Number.isFinite(value) ? value : DEFAULT_GENERATE.radius * 4;
-  };
-
+  /* A waypoint's stored position IS the camera position - the pose the user
+     captured - so there is nothing to lift. This used to add eye height to a
+     floor point, which is precisely what made every plan a floor plan: a
+     waypoint captured four metres up came back down before it was ever
+     flown. */
   const anchorOf = (wp: Waypoint) =>
-    new THREE.Vector3(
-      wp.position[0],
-      cameraYAt(grid, wp.position, opts.cameraHeight, fallbackFloorY),
-      wp.position[2],
-    );
+    new THREE.Vector3(wp.position[0], wp.position[1], wp.position[2]);
+
+  /* Room to move, measured in space around the camera rather than read out of
+     the 2D clearance field. Over a wall that field reports centimetres in the
+     middle of open sky, and shot amplitudes are scaled by it - so read flat, an
+     aerial orbit shrinks to a twitch for want of elbow room it actually has. */
+  const roomAround = (position: Vec3): number =>
+    freeRadiusAt(grid, position[0], position[1], position[2]);
 
   // Memoised: a travel leg needs the NEXT waypoint's opening pose to stay
   // continuous with it, so each shot is asked for twice and fitting it is the
@@ -329,9 +340,9 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       // frame; the shot falls back to its direction of travel.
       hasTarget: intent.targetDistance > 1e-6,
       aim: intent.aim,
-      clearance: clearanceAt(wp.position),
+      clearance: roomAround(wp.position),
     };
-    const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius);
+    const fitted = fitShotToRoom(grid, intent.shotType, ctx, radius, wp.ignoreWalls);
     fittedShots.set(index, fitted);
     return fitted;
   };
@@ -361,10 +372,68 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     return speed;
   };
 
+  /**
+   * How long a travel leg actually takes.
+   *
+   * Its own length at the style's speed, OR long enough for the view to turn
+   * onto the next shot, whichever is longer.
+   *
+   * The second half is new, and it is what a captured framing needs. A leg
+   * hands over to the shot at its end by turning onto that shot's opening
+   * direction, and `limitTurnRate` will not let the view rotate faster than a
+   * real head can be swung. Those two rules used to be set independently: a
+   * short hop between two waypoints facing opposite ways asked for 110 degrees
+   * of turn in 1.9 seconds, the limiter refused, and the shot opened with the
+   * camera still 110 degrees short of the frame the user had captured - the
+   * one thing pressing the capture key is supposed to guarantee.
+   *
+   * Bounded by construction: neither hop can exceed half a turn, so at the
+   * default 80 deg/s a leg is never stretched past about 5 seconds however
+   * badly two consecutive framings disagree.
+   *
+   * This makes the turn FEASIBLE rather than finished. The blend that performs
+   * it is a smootherstep, whose peak rate is 1.875x its average, so a leg long
+   * enough for the average is still rate-limited through the middle of the
+   * turn: measured on a 172-degree reversal, the shot opens about 30 degrees
+   * short and settles onto its mark within half a second. Sizing for the peak
+   * instead would stretch that same 3 m hop to nine seconds, which trades a
+   * camera settling onto its mark - what an operator visibly does - for a
+   * camera crawling. scripts/path-check.ts reports both numbers.
+   */
+  const legDurations = new Map<number, number>();
+  const legDurationFor = (index: number): number => {
+    const cached = legDurations.get(index);
+    if (cached !== undefined) return cached;
+    const leg = legs[index];
+    if (!leg) return 0;
+
+    let duration = leg.duration;
+    const exit = shotContextFor(index);
+    const entry = shotContextFor(index + 1);
+    if (leg.curve && exit && entry) {
+      const before = sampleShot(exit.shotType, exit.ctx, 1);
+      const after = sampleShot(entry.shotType, entry.ctx, 0);
+      // Through the middle, because that is the route the view takes: off the
+      // last framing, onto the direction of travel, then onto the next.
+      const middle = leg.curve.getTangentAt(0.5);
+      const off = angleBetween(before.lookAt.clone().sub(before.position), middle);
+      const onto = angleBetween(middle, after.lookAt.clone().sub(after.position));
+      const perSecond = (opts.maxTurnRateDegPerSec * Math.PI) / 180;
+      // Each of the two turns gets LOOK_BLEND_FRACTION of the leg, not all of
+      // it, so that is the window the rate has to fit inside.
+      const window = perSecond * LOOK_BLEND_FRACTION;
+      if (window > 1e-6) duration = Math.max(duration, Math.max(off, onto) / window);
+    }
+
+    legDurations.set(index, duration);
+    return duration;
+  };
+
   const legSpeedFor = (index: number): number => {
     const leg = legs[index];
-    if (!leg || !leg.curve || leg.duration <= 0) return 0;
-    return leg.length / leg.duration;
+    const duration = legDurationFor(index);
+    if (!leg || !leg.curve || duration <= 0) return 0;
+    return leg.length / duration;
   };
 
   /** This segment's own rate, against a neighbour's. 0 when there is none. */
@@ -378,15 +447,32 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
     /* shot at waypoint i */
     const validated = shotContextFor(i)!;
     const anchor = validated.ctx.anchor;
-    if (validated.degraded) {
+    if (validated.fit !== 'clear') {
       warnings.push({
-        code: 'shot-clipped', severity: 'warning', waypointIds: [w.id],
-        message: validated.fellBackToHold
-          ? `${shot.shotType} at ${w.id} would have gone through a wall; held in place instead.`
-          : `${shot.shotType} at ${w.id} was tightened to ${Math.round(validated.ctx.intensity * 100)}% to clear the walls.`,
+        code: 'shot-clipped',
+        /* A forced shot is not a problem the reader has to solve - they solved
+           it - so it does not join the list of things demanding attention on
+           the plan screen. It is still emitted, because "you told me to fly
+           through that wall and I did" has to be recoverable from the output
+           rather than only from the panel. */
+        severity: validated.fit === 'forced' ? 'info' : 'warning',
+        waypointIds: [w.id],
+        message:
+          validated.fit === 'held'
+            ? `${shot.shotType} at ${w.id} would have gone through a wall; held in place instead.`
+            : validated.fit === 'forced'
+              ? `${shot.shotType} at ${w.id} passes through the collider; performed as authored ` +
+                `because this waypoint is set to ignore the walls.`
+              : `${shot.shotType} at ${w.id} was tightened to ` +
+                `${Math.round(validated.ctx.intensity * 100)}% to clear the walls.`,
       });
       // Keep the reported intent honest about what will actually be rendered.
-      shots[i] = { ...shot, shotType: validated.shotType, intensity: validated.ctx.intensity };
+      shots[i] = {
+        ...shot,
+        shotType: validated.shotType,
+        intensity: validated.ctx.intensity,
+        wallFit: validated.fit,
+      };
     }
 
     // Hand over at the neighbours' actual speeds, so the junction is smooth in
@@ -470,7 +556,7 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
       pushSegment(
         'travel', `travel:${w.id}->${nextWaypoint.id}`,
         nextWaypoint.id, w.id, nextWaypoint.id,
-        leg.duration,
+        legDurationFor(i),
         (t) => {
           const e = travelEase(t);
           if (!leg.curve) {
@@ -550,11 +636,19 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
   }
 
   // Bound the worst-case view rotation across the whole table.
-  const clampedFrames = limitTurnRate(frames, opts.fps, opts.maxTurnRateDegPerSec);
+  const clampedFrames = limitTurnRate(
+    frames, opts.fps, opts.maxTurnRateDegPerSec, pitchCeiling(waypoints),
+  );
 
   const stats: PathStats = {
     gridCols: grid.cols, gridRows: grid.rows, cellSize: grid.cellSize,
     recomputedSegments: recomputed, reusedSegments: reused,
+    /* Reported, not merely counted: "3 of 4 legs flown direct" is the one
+       number that says whether this is a camera moving through the space or a
+       camera being walked around it, and it is invisible in the frame table.
+       Counted off the finished legs so a cached one is counted as what it is. */
+    directLegs: legs.filter((l) => l?.direct).length,
+    routedLegs: legs.filter((l) => l && !l.direct).length,
     turnRateClampedFrames: clampedFrames,
     generateMs: round(now() - t0, 2), gridMs: round(gridMs, 2),
   };
@@ -581,7 +675,12 @@ export function generatePath(input: PathInput, cache: PathCache = createPathCach
  * sweep that catches up within a few frames rather than a one-frame cut. The
  * cap is deliberately generous - a genuine whip pan is still allowed.
  */
-function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: number): number {
+function limitTurnRate(
+  frames: FrameEntry[],
+  fps: number,
+  degreesPerSecond: number,
+  maxPitch: number,
+): number {
   if (frames.length < 2) return 0;
   const maxStep = (degreesPerSecond * Math.PI) / 180 / Math.max(1, fps);
 
@@ -616,17 +715,10 @@ function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: numb
     }
     want.divideScalar(distance);
 
-    // Keep the camera near level. Nothing is framed by pointing at bare
-    // ceiling or bare floor, and an unconstrained turn could tip through
-    // vertical on its way round - the camera reversing by pitching over
-    // backwards instead of turning on the spot.
-    const elevation = Math.asin(Math.max(-1, Math.min(1, want.y)));
-    if (Math.abs(elevation) > MAX_PITCH) {
-      const capped = Math.sign(elevation) * MAX_PITCH;
-      const horizontal = Math.hypot(want.x, want.z) || 1;
-      const scale = Math.cos(capped) / horizontal;
-      want.set(want.x * scale, Math.sin(capped), want.z * scale).normalize();
-    }
+    // Keep the view inside the pitch band the plan asked for, so a turn cannot
+    // tip through vertical on its way round - the camera reversing by pitching
+    // over backwards instead of turning on the spot.
+    capPitch(want, maxPitch);
 
     const dot = Math.min(1, Math.max(-1, prev.dot(want)));
     const angle = Math.acos(dot);
@@ -640,6 +732,17 @@ function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: numb
       axis.normalize();
       want.copy(prev).applyAxisAngle(axis, maxStep).normalize();
       clamped++;
+
+      /* AND AGAIN, because the rate limiter turns along a great circle and a
+         great circle does not stay at a constant elevation. Two directions
+         both exactly at the ceiling, a long way apart in bearing, are joined
+         by an arc that dips well BELOW it - so a step along that arc came out
+         steeper than either end, became the next frame's starting point, and
+         the whole sequence walked itself downward one step at a time. Measured
+         on a single aerial waypoint: a 43.5 degree ceiling produced a 57.6
+         degree view. Capping the target alone can never fix that; the
+         invariant has to hold on what is actually written. */
+      capPitch(want, maxPitch);
     }
 
     // Re-project at the target's own distance so framing scale is preserved.
@@ -653,6 +756,23 @@ function limitTurnRate(frames: FrameEntry[], fps: number, degreesPerSecond: numb
   return clamped;
 }
 
+/**
+ * Fold a unit direction back inside a pitch band, keeping its bearing.
+ *
+ * In place, on a vector the caller already owns - this runs twice per frame of
+ * the whole table.
+ */
+function capPitch(direction: THREE.Vector3, maxPitch: number): void {
+  const elevation = Math.asin(Math.max(-1, Math.min(1, direction.y)));
+  if (Math.abs(elevation) <= maxPitch) return;
+  const capped = Math.sign(elevation) * maxPitch;
+  const horizontal = Math.hypot(direction.x, direction.z) || 1;
+  const scale = Math.cos(capped) / horizontal;
+  direction
+    .set(direction.x * scale, Math.sin(capped), direction.z * scale)
+    .normalize();
+}
+
 /* -------------------------------------------------------------------------- */
 
 type LegResult = {
@@ -662,12 +782,81 @@ type LegResult = {
   duration: number;
   polyline: Vec3[];
   warnings: PathWarning[];
+  /** Horizontal direction of travel at each end. Null for a leg that is purely
+   *  vertical, which has no horizontal direction to report and must not be
+   *  handed a normalised zero vector pretending it does. */
   startTangent: THREE.Vector3 | null;
   endTangent: THREE.Vector3 | null;
   hasLookTargets: boolean;
+  /** True when the camera flew the straight line rather than being routed. */
+  direct: boolean;
   cached?: boolean;
 };
 
+/**
+ * How far apart two poses have to be before the leg between them is sampled as
+ * a route rather than as a straight line. Below it there is no leg to speak of.
+ */
+const DEGENERATE_LEG = 1e-4;
+
+/** Spacing of the drawn polyline, in metres. */
+const POLYLINE_STEP = 0.15;
+
+/**
+ * Height difference below which climbing to the higher pose buys nothing.
+ *
+ * Two poses at the same altitude cross at that altitude, which is the straight
+ * line attempt 1 has already tried and failed. Ten centimetres, so a pair of
+ * hand-flown poses that are only nominally different do not spend two segment
+ * tests proving it.
+ */
+const OVERFLY_MIN_RISE = 0.1;
+
+/** Horizontal unit tangent, or null where the curve is going straight up. */
+function horizontalTangent(curve: THREE.CatmullRomCurve3, u: number): THREE.Vector3 | null {
+  const t = curve.getTangentAt(u).setY(0);
+  return t.lengthSq() > 1e-8 ? t.normalize() : null;
+}
+
+/** Sample a finished curve for drawing - in space, exactly where it flies. */
+function samplePolyline(curve: THREE.CatmullRomCurve3, length: number): Vec3[] {
+  const steps = Math.max(1, Math.ceil(length / POLYLINE_STEP));
+  const out: Vec3[] = [];
+  const p = new THREE.Vector3();
+  for (let i = 0; i <= steps; i++) {
+    curve.getPointAt(i / steps, p);
+    out.push([p.x, p.y, p.z]);
+  }
+  return out;
+}
+
+/**
+ * One travel leg, between two captured poses.
+ *
+ * THE ORDER OF THE THREE ATTEMPTS IS THE DESIGN
+ *
+ *  1. THE STRAIGHT LINE, tested in 3D. This is what a camera does, and now that
+ *     waypoints carry a height it is available most of the time: over the
+ *     furniture, across the stairwell, down from an aerial. The old pipeline
+ *     could not consider it, because at a fixed eye height above the floor the
+ *     straight line between two rooms goes through the wall between them.
+ *
+ *  2. THE CLIMB-AND-CROSS, when the two poses are at different heights and the
+ *     straight line between them is not clear. Rise where you are, cross at the
+ *     higher of the two altitudes, come down at the other end - which is what a
+ *     drone does, and the only reason the higher waypoint was flown up to. It
+ *     is two extra segment tests, and it is the difference between an aerial
+ *     waypoint being reached over the wall and being walked around it.
+ *
+ *  3. A HORIZONTAL A* ROUTE, when something solid really is in the way, carrying
+ *     the two poses' own heights across it. Walls are vertical, so routing in
+ *     plan and interpolating height is not an approximation of the answer for
+ *     the case that needs it - it IS the answer, and it reuses the string
+ *     pulling and refinement the router already does well.
+ *
+ *  4. A STRAIGHT HOP WITH A WARNING, when there is no route at all. Unchanged:
+ *     the timeline stays coherent and the failure is stated rather than hidden.
+ */
 function computeLeg(
   grid: WalkGrid,
   a: Waypoint,
@@ -677,33 +866,104 @@ function computeLeg(
   metresPerSecond: number,
 ): LegResult {
   const warnings: PathWarning[] = [];
+  const pa = new THREE.Vector3(a.position[0], a.position[1], a.position[2]);
+  const pb = new THREE.Vector3(b.position[0], b.position[1], b.position[2]);
+
+  /* ---- nothing to travel ---- */
+  if (pa.distanceTo(pb) < DEGENERATE_LEG) {
+    warnings.push({
+      code: 'degenerate-segment', severity: 'info', waypointIds: [a.id, b.id],
+      message:
+        `${a.id} and ${b.id} are in the same spot, so there is nothing to travel; ` +
+        `the camera holds briefly between their shots.`,
+    });
+    return {
+      curve: null, length: 0, duration: 0.4, polyline: [vec3(pa)], warnings,
+      startTangent: null, endTangent: null, hasLookTargets: true, direct: true,
+    };
+  }
+
+  /* ---- 1. straight through the air ---- */
+  if (hasFlightPath(grid, pa, pb, opts.radius)) {
+    const curve = new THREE.CatmullRomCurve3([pa, pb], false, 'centripetal');
+    const length = pa.distanceTo(pb);
+    const heading = pb.clone().sub(pa).setY(0);
+    const tangent = heading.lengthSq() > 1e-8 ? heading.normalize() : null;
+    return {
+      curve,
+      length,
+      duration: Math.max(0.4, length / metresPerSecond),
+      polyline: samplePolyline(curve, length),
+      warnings,
+      startTangent: tangent,
+      endTangent: tangent ? tangent.clone() : null,
+      hasLookTargets: true,
+      direct: true,
+    };
+  }
+
+  /* ---- 2. climb, cross, descend ---- */
+  //
+  // Only when the two poses differ in height: at equal heights the crossing
+  // altitude IS the straight line, which attempt 1 has already ruled out.
+  if (Math.abs(pa.y - pb.y) > OVERFLY_MIN_RISE) {
+    const crossY = Math.max(pa.y, pb.y);
+    const up = new THREE.Vector3(pa.x, crossY, pa.z);
+    const over = new THREE.Vector3(pb.x, crossY, pb.z);
+    const clear =
+      hasFlightPath(grid, pa, up, opts.radius) &&
+      hasFlightPath(grid, up, over, opts.radius) &&
+      hasFlightPath(grid, over, pb, opts.radius);
+
+    if (clear) {
+      const curve = new THREE.CatmullRomCurve3([pa, up, over, pb], false, 'centripetal');
+      const length = curve.getLength();
+      /* The corners are rounded by the spline, and rounding cuts INSIDE the
+         turn - which at the top of the climb is toward whatever the climb was
+         there to clear. So the smoothed curve is validated, not just the three
+         straight segments it was built from; a curve that clips falls through
+         to the router rather than being shipped with a warning. */
+      if (countViolations(grid, curve, opts.radius, length) === 0) {
+        return {
+          curve,
+          length,
+          duration: Math.max(0.4, length / metresPerSecond),
+          polyline: samplePolyline(curve, length),
+          warnings,
+          startTangent: horizontalTangent(curve, 0),
+          endTangent: horizontalTangent(curve, 1),
+          hasLookTargets: true,
+          direct: true,
+        };
+      }
+    }
+  }
+
+  /* ---- 3. routed around what is in the way ---- */
   const from = worldToCell(grid, a.position[0], a.position[2]);
   const to = worldToCell(grid, b.position[0], b.position[2]);
-
   const res = findPath(grid, from, to, { radius: opts.radius });
 
   if (!res.found) {
+    /* ---- 4. no route at all: hop, and say so ---- */
     // Ambiguous case, reported rather than papered over: emit a straight hop so
     // the timeline stays coherent, and say plainly that it clips.
     warnings.push({
       code: 'unreachable', severity: 'error', waypointIds: [a.id, b.id],
       message:
-        `No walkable route from ${a.id} to ${b.id} (${res.failure}). ` +
+        `No flyable route from ${a.id} to ${b.id} (${res.failure}). ` +
         `The camera will cut straight across, which may pass through walls.`,
     });
-    const ay = cameraYAt(grid, a.position, opts.cameraHeight, fallbackFloorY);
-    const by = cameraYAt(grid, b.position, opts.cameraHeight, fallbackFloorY);
-    const pa = new THREE.Vector3(a.position[0], ay, a.position[2]);
-    const pb = new THREE.Vector3(b.position[0], by, b.position[2]);
     const curve = new THREE.CatmullRomCurve3([pa, pb], false, 'centripetal');
-    const dir = pb.clone().sub(pa).setY(0);
-    const length = dir.length();
+    const length = pa.distanceTo(pb);
+    const heading = pb.clone().sub(pa).setY(0);
+    const tangent = heading.lengthSq() > 1e-8 ? heading.normalize() : null;
     return {
       curve, length, duration: Math.max(0.4, length / metresPerSecond),
-      polyline: [vec3(pa), vec3(pb)], warnings,
-      startTangent: length > 1e-6 ? dir.clone().normalize() : null,
-      endTangent: length > 1e-6 ? dir.clone().normalize() : null,
-      hasLookTargets: true,
+      polyline: samplePolyline(curve, length), warnings,
+      startTangent: tangent,
+      endTangent: tangent ? tangent.clone() : null,
+      hasLookTargets: true, direct: false,
     };
   }
 
@@ -715,37 +975,46 @@ function computeLeg(
         ...(res.snappedGoal ? [b.id] : []),
       ],
       message:
-        `${res.snappedStart ? a.id : b.id} sits inside a wall or off the floor; ` +
-        `it was nudged to the nearest spot the camera can occupy.`,
+        `${res.snappedStart ? a.id : b.id} sits where the camera cannot pass at ` +
+        `floor level; its leg was routed from the nearest spot that can.`,
     });
   }
 
+  /* The height the leg flies, as an offset above whatever floor is under it.
+   *
+   * Interpolating the two poses' heights ABOVE THEIR OWN FLOORS rather than
+   * their absolute Y is what keeps a camera level over a rising floor instead
+   * of ploughing into it, and it reduces exactly to the old behaviour - floor
+   * plus eye height, all the way along - when both poses were captured at eye
+   * height over a flat one. The clamp is the guard for the case interpolation
+   * cannot cover: a floor that rises higher in the MIDDLE of the leg than at
+   * either end of it. */
+  const heightA = a.position[1] - floorYAtCell(grid, from.col, from.row, fallbackFloorY);
+  const heightB = b.position[1] - floorYAtCell(grid, to.col, to.row, fallbackFloorY);
+  const heightAt: HeightProfile = (u, floorY) =>
+    floorY + Math.max(opts.floorClearance, heightA + (heightB - heightA) * u);
+
   // buildCurve simplifies internally and keeps the full path for refinement.
-  const simple = simplifyPath(grid, res.cells, opts.radius);
   const built = buildCurve(
     grid, res.cells,
-    { radius: opts.radius, cameraHeight: opts.cameraHeight },
+    { radius: opts.radius, heightAt },
     fallbackFloorY,
   );
 
   if (!built || built.length < 1e-4) {
-    // Promised in PathWarningCode and previously never produced: a leg with no
-    // length is 0.4s of the camera sitting still, and an empty polyline draws
-    // no route on the mini-map for that stretch.
-    warnings.push({
-      code: 'degenerate-segment', severity: 'info', waypointIds: [a.id, b.id],
-      message:
-        `${a.id} and ${b.id} are in the same spot, so there is nothing to travel; ` +
-        `the camera holds briefly between their shots.`,
-    });
-    const hold = new THREE.Vector3(
-      a.position[0],
-      cameraYAt(grid, a.position, opts.cameraHeight, fallbackFloorY),
-      a.position[2],
-    );
+    // Two poses whose FLOOR cells coincide but whose positions do not - one
+    // above the other on a mezzanine, say. There is no horizontal route to
+    // build, so fly the straight line and let the validator have its say.
+    const curve = new THREE.CatmullRomCurve3([pa, pb], false, 'centripetal');
+    const length = pa.distanceTo(pb);
+    const heading = pb.clone().sub(pa).setY(0);
+    const tangent = heading.lengthSq() > 1e-8 ? heading.normalize() : null;
     return {
-      curve: null, length: 0, duration: 0.4, polyline: [vec3(hold)], warnings,
-      startTangent: null, endTangent: null, hasLookTargets: true,
+      curve, length, duration: Math.max(0.4, length / metresPerSecond),
+      polyline: samplePolyline(curve, length), warnings,
+      startTangent: tangent,
+      endTangent: tangent ? tangent.clone() : null,
+      hasLookTargets: true, direct: false,
     };
   }
 
@@ -753,34 +1022,29 @@ function computeLeg(
     warnings.push({
       code: 'curve-clips-wall', severity: 'warning', waypointIds: [a.id, b.id],
       message:
-        `The smoothed curve between ${a.id} and ${b.id} clips a wall at ` +
+        `The smoothed flight between ${a.id} and ${b.id} clips geometry at ` +
         `${built.violations} sampled point(s).`,
     });
   }
 
-  // Sample the finished curve rather than returning the simplified A* nodes:
-  // this is what gets drawn on the floor and on the mini-map, and a polygonal
-  // corner-node line would visibly disagree with the curve the camera flies.
-  const polyline: Vec3[] = [];
-  {
-    const steps = Math.max(2, Math.ceil(built.length / 0.15));
-    const p = new THREE.Vector3();
-    for (let i = 0; i <= steps; i++) {
-      built.curve.getPointAt(i / steps, p);
-      const { col, row } = worldToCell(grid, p.x, p.z);
-      polyline.push([p.x, floorYAtCell(grid, col, row, fallbackFloorY), p.z]);
-    }
-  }
+  /* Sample the finished curve rather than returning the simplified A* nodes:
+     this is what gets drawn in 3D and on the mini-map, and a polygonal
+     corner-node line would visibly disagree with the curve the camera flies.
 
+     Drawn AT THE HEIGHT IT FLIES. It used to be projected down onto the floor
+     under each sample, which drew a plan of the route rather than the route -
+     so a leg lifting over a balustrade and a leg squeezing under it were the
+     same line on screen. */
   return {
     curve: built.curve,
     length: built.length,
     duration: Math.max(0.4, built.length / metresPerSecond),
-    polyline,
+    polyline: samplePolyline(built.curve, built.length),
     warnings,
-    startTangent: built.curve.getTangentAt(0).setY(0).normalize(),
-    endTangent: built.curve.getTangentAt(1).setY(0).normalize(),
+    startTangent: horizontalTangent(built.curve, 0),
+    endTangent: horizontalTangent(built.curve, 1),
     hasLookTargets: true,
+    direct: false,
   };
 }
 
@@ -789,8 +1053,8 @@ function computeLeg(
 type FittedShot = {
   shotType: ShotType;
   ctx: ShotContext;
-  degraded: boolean;
-  fellBackToHold: boolean;
+  /** See ShotIntent.wallFit. */
+  fit: ShotIntent['wallFit'];
 };
 
 /**
@@ -806,6 +1070,14 @@ function fitShotToRoom(
   shotType: ShotType,
   ctx: ShotContext,
   radius: number,
+  /**
+   * The waypoint's own verdict on the collider here. When it says ignore, the
+   * shot is still measured - the caller reports what was found - but nothing
+   * about it is changed. See Waypoint.ignoreWalls for why that has to exist:
+   * the mesh is a reconstruction, and its phantom walls otherwise get to
+   * overrule a frame the user chose deliberately.
+   */
+  ignoreWalls: boolean,
 ): FittedShot {
   // Sample density follows the shot's own reach, not a fixed count.
   //
@@ -821,14 +1093,21 @@ function fitShotToRoom(
   const clips = (candidate: ShotContext, type: ShotType): boolean => {
     for (let i = 0; i <= SAMPLES; i++) {
       const { position } = sampleShot(type, candidate, i / SAMPLES);
-      const { col, row } = worldToCell(grid, position.x, position.z);
-      if (!isPassable(grid, col, row, radius)) return true;
+      // In space, not in plan. A rise from an aerial waypoint moves entirely in
+      // Y, so a 2D test could only ever report the cell it started over - and
+      // over a rooftop that cell is a wall, so the shot was pulled down to
+      // nothing and then replaced by a hold.
+      if (!isFreeAt(grid, position.x, position.y, position.z, radius)) return true;
     }
     return false;
   };
 
   if (!clips(ctx, shotType)) {
-    return { shotType, ctx, degraded: false, fellBackToHold: false };
+    return { shotType, ctx, fit: 'clear' };
+  }
+  if (ignoreWalls) {
+    // Measured, reported, and left exactly as authored.
+    return { shotType, ctx, fit: 'forced' };
   }
   // Shrink the move, do not swap the shot. Replacing a clipping orbit with a
   // hold made choosing orbit, dolly-through, push-in or pull-back appear to do
@@ -842,23 +1121,27 @@ function fitShotToRoom(
       fitScale: scale,
     };
     if (!clips(softer, shotType)) {
-      return { shotType, ctx: softer, degraded: true, fellBackToHold: false };
+      return { shotType, ctx: softer, fit: 'tightened' };
     }
   }
   // Even a motionless camera clips, so the anchor itself is unusable. That is
   // a different failure and does warrant a hold.
-  return {
-    shotType: 'hold',
-    ctx: { ...ctx, intensity: 0 },
-    degraded: true,
-    fellBackToHold: true,
-  };
+  return { shotType: 'hold', ctx: { ...ctx, intensity: 0 }, fit: 'held' };
 }
 
 /* -------------------------------------------------------------------------- */
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Angle between two directions, either of which may be degenerate. */
+function angleBetween(a: THREE.Vector3, b: THREE.Vector3): number {
+  const la = a.length();
+  const lb = b.length();
+  if (la < 1e-6 || lb < 1e-6) return 0;
+  const dot = a.dot(b) / (la * lb);
+  return Math.acos(Math.max(-1, Math.min(1, dot)));
 }
 
 /**
@@ -874,8 +1157,33 @@ function shotTranslates(shotType: ShotType): boolean {
   return shotType !== 'hold';
 }
 
-/** How far off level the view may point. Beyond this there is only ceiling or floor. */
-const MAX_PITCH = (28 * Math.PI) / 180;
+/**
+ * How far off level the view may point, derived from the plan itself.
+ *
+ * A fixed 28 degrees was right while every waypoint was a dot on the floor:
+ * nothing was framed by pointing at bare ceiling, so anything steeper was a
+ * turn going wrong rather than a shot. A captured pose is the opposite - if the
+ * user flew up and framed the room from above, that pitch IS the shot, and a
+ * ceiling that quietly levels it out is the plan being overruled by a
+ * constant.
+ *
+ * So the ceiling follows what was authored, with headroom for the shots that
+ * swing about it, and keeps two bounds of its own: a floor, so an ordinary
+ * level plan still gets the smoothing it always did, and a hard limit short of
+ * vertical, where the turn limiter's own axis of rotation degenerates.
+ */
+const PITCH_FLOOR = (28 * Math.PI) / 180;
+const PITCH_HEADROOM = (12 * Math.PI) / 180;
+const PITCH_HARD_LIMIT = (85 * Math.PI) / 180;
+
+function pitchCeiling(waypoints: readonly Waypoint[]): number {
+  let steepest = 0;
+  for (const w of waypoints) {
+    const p = Math.abs(w.pitch);
+    if (Number.isFinite(p) && p > steepest) steepest = p;
+  }
+  return Math.min(PITCH_HARD_LIMIT, Math.max(PITCH_FLOOR, steepest + PITCH_HEADROOM));
+}
 
 /** Smallest reach assumed when sizing the shot clip test, in metres. */
 const AMPLITUDE_REACH_FLOOR = 1.8;

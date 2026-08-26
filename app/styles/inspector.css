@@ -128,6 +128,25 @@
   color: var(--warn);
 }
 
+/* A shot the user has deliberately kept is not a warning any more. It still
+   has to be SAID - the render really does pass through the collider - but in
+   the voice of a note rather than of a problem, or the panel spends the rest
+   of the session insisting on a decision that has already been made. */
+.insp__clipped[data-fit='forced'] {
+  color: var(--muted);
+}
+
+/* The sentence under a control that needs one. Only the wall override has
+   earned one so far: it is the single place in this panel where the right
+   answer depends on something the app cannot see - whether the wall the mesh
+   is reporting is really there. */
+.insp__hint {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* ================================================================
  * Fields
  * ================================================================ */

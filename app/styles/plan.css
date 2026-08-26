@@ -454,3 +454,97 @@
     transition-duration: 1ms;
   }
 }
+
+/* ---------------- capturing a frame ---------------- */
+
+/* The shutter.
+ *
+ * A capture leaves nothing on screen where the user is looking: the gizmo it
+ * creates is at the camera's own optical centre, which is behind the near clip
+ * plane, so the only evidence is a row appearing in a list in the far corner.
+ * A key that appears to do nothing gets pressed again, and the plan quietly
+ * gains four identical waypoints.
+ *
+ * White rather than black, and brief. It is standing in for a shutter, and the
+ * two things it must not do are hide the frame that was just taken or persist
+ * long enough to interrupt flying. `pointer-events: none` because it covers the
+ * whole render, including the map beneath it.
+ *
+ * Re-mounted per capture via a React key, so two presses in a row flash twice.
+ */
+.plan__shutter {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #ffffff;
+  z-index: var(--z-overlay);
+  animation: plan-shutter 240ms var(--ease-out) forwards;
+}
+
+@keyframes plan-shutter {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* The one instruction this screen cannot do without.
+ *
+ * Bottom centre, between the map and the running order, which are pinned to the
+ * two bottom corners. It carries the full sentence while the plan is empty -
+ * nothing else on the screen says how to make a waypoint - and shrinks to the
+ * key and three words once the user has demonstrably found it.
+ */
+.plan__capture {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s3);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-pill);
+  background: var(--plan-veil);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-2);
+  white-space: nowrap;
+  pointer-events: none;
+  /* The halo from .plan__over is for text sitting straight on the render; this
+     row has its own ground, so the halo would only fur the glyph edges. */
+  text-shadow: none;
+}
+
+.plan__capture:not([data-full='true']) {
+  color: var(--muted);
+  font-size: var(--fs-1);
+}
+
+.plan__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--s1);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  line-height: 1;
+}
+
+/* The flash is decoration for an action the user just took; someone who has
+   asked for less motion has already been told the waypoint landed by the row
+   appearing in the running order. */
+@media (prefers-reduced-motion: reduce) {
+  .plan__shutter {
+    display: none;
+  }
+}

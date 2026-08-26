@@ -19,11 +19,20 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { Vec3 } from '@/lib/types';
 
-/** Matches the MiniMap `camera` prop. */
-export type CameraPose = { position: Vec3; lookAt: Vec3 };
+/**
+ * Matches the MiniMap `camera` prop.
+ *
+ * Named `TrackedPose` and not `CameraPose`, which is a different thing: this is
+ * where the you-are-here chevron goes, a position and a point it looks at, at
+ * whatever rate the map needs. `CameraPose` in lib/types.ts is an AUTHORED
+ * pose - position, yaw, pitch, field of view - and is what a waypoint is made
+ * of. Two shapes, both honestly called "the camera's pose", and one name
+ * between them is how a look-at point ends up being read as a yaw.
+ */
+export type TrackedPose = { position: Vec3; lookAt: Vec3 };
 
 export type CameraTrackerProps = {
-  onChange: (pose: CameraPose) => void;
+  onChange: (pose: TrackedPose) => void;
   /** Publishes per second. */
   hz?: number;
   /** Metres of travel below which the pose counts as unchanged. */

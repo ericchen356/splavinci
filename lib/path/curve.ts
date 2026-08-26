@@ -30,15 +30,27 @@ import {
   cellToWorld,
   floorYAtCell,
   hasLineOfSight,
-  isPassable,
-  worldToCell,
+  isFreeAt,
   type WalkGrid,
 } from './grid';
 import type { Cell } from './astar';
 
+/**
+ * How high above a cell's own floor the camera flies at fraction `u` along the
+ * route, given that cell's floor height.
+ *
+ * A function rather than the single `cameraHeight` number it replaces, because
+ * a routed leg now runs between two AUTHORED camera positions and has to
+ * arrive at the height it was given. The floor is still an argument, so a
+ * profile can follow terrain where it wants to and ignore it where it does not
+ * - which is the difference between a camera walking up a hill and one flying
+ * level over it.
+ */
+export type HeightProfile = (u: number, floorY: number) => number;
+
 export type CurveOptions = {
-  /** Camera height above the floor surface. */
-  cameraHeight: number;
+  /** Where the camera flies, in world Y, along the route. */
+  heightAt: HeightProfile;
   /** Camera body radius, for validation. */
   radius: number;
   /** Upper bound on spacing when densifying before the spline. */
@@ -47,8 +59,17 @@ export type CurveOptions = {
   tension: number;
 };
 
+/**
+ * Eye height for a camera with no authored one.
+ *
+ * Only reached by callers that ask for the default profile - the headless grid
+ * tools, and any leg whose waypoints could not say. A generated path takes its
+ * heights from the poses that were captured.
+ */
+export const DEFAULT_CAMERA_HEIGHT = 1.55;
+
 export const DEFAULT_CURVE: CurveOptions = {
-  cameraHeight: 1.55,
+  heightAt: (_u, floorY) => floorY + DEFAULT_CAMERA_HEIGHT,
   radius: 0.3,
   maxSpacing: 0.9,
   tension: 0.5,
@@ -56,16 +77,17 @@ export const DEFAULT_CURVE: CurveOptions = {
 
 /* -------------------------------------------------------------------------- */
 
-/** Grid cells -> world points at camera height, following the floor. */
+/** Grid cells -> world points, lifted by a height profile. */
 export function cellsToWorldPoints(
   grid: WalkGrid,
   cells: Cell[],
-  cameraHeight: number,
+  heightAt: HeightProfile,
   fallbackFloorY: number,
 ): THREE.Vector3[] {
-  return cells.map((c) => {
+  const last = Math.max(1, cells.length - 1);
+  return cells.map((c, i) => {
     const { x, z } = cellToWorld(grid, c.col, c.row);
-    const y = floorYAtCell(grid, c.col, c.row, fallbackFloorY) + cameraHeight;
+    const y = heightAt(i / last, floorYAtCell(grid, c.col, c.row, fallbackFloorY));
     return new THREE.Vector3(x, y, z);
   });
 }
@@ -103,12 +125,13 @@ export function buildCurve(
   // String pulling gives the corners the route actually turns; those are the
   // control points a spline wants.
   const cornerIndices = simplifyIndices(grid, cells, opts.radius);
+  const lastIndex = Math.max(1, cells.length - 1);
   const worldOf = (index: number) => {
     const c = cells[index];
     const { x, z } = cellToWorld(grid, c.col, c.row);
     return new THREE.Vector3(
       x,
-      floorYAtCell(grid, c.col, c.row, fallbackFloorY) + opts.cameraHeight,
+      opts.heightAt(index / lastIndex, floorYAtCell(grid, c.col, c.row, fallbackFloorY)),
       z,
     );
   };
@@ -183,8 +206,9 @@ function violatingSpans(
   for (let i = 0; i <= samples; i++) {
     const u = i / samples;
     curve.getPoint(u, p);
-    const { col, row } = worldToCell(grid, p.x, p.z);
-    if (isPassable(grid, col, row, radius)) continue;
+    // Tested where the camera actually IS, height included: a curve that flies
+    // over a wall is not clipping it, and a 2D test cannot tell the two apart.
+    if (isFreeAt(grid, p.x, p.y, p.z, radius)) continue;
     total++;
     // Catmull-Rom parameterises uniformly across spans, so u maps directly.
     spans.add(Math.min(spanCount - 1, Math.floor(u * spanCount)));
@@ -222,8 +246,7 @@ export function countViolations(
   const p = new THREE.Vector3();
   for (let i = 0; i <= samples; i++) {
     curve.getPoint(i / samples, p);
-    const { col, row } = worldToCell(grid, p.x, p.z);
-    if (!isPassable(grid, col, row, radius)) violations++;
+    if (!isFreeAt(grid, p.x, p.y, p.z, radius)) violations++;
   }
   return violations;
 }
