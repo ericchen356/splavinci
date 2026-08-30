@@ -34,7 +34,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 
@@ -46,6 +46,7 @@ import {
   readProgress,
   type MarbleOperation,
 } from '@/lib/marble';
+import { GENERATED_DIR, reserveSetId, safeFileName } from './folders';
 import { framesToExtract } from './limits';
 
 /* -------------------------------------------------------------------------- */
@@ -272,51 +273,6 @@ function onPoll(job: Job, op: MarbleOperation, elapsedMs: number): void {
 }
 
 /* -------------------------------------------------------------------------- */
-/* naming                                                                     */
-/* -------------------------------------------------------------------------- */
-
-const GENERATED_DIR = resolve(process.cwd(), 'public', 'generated');
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-}
-
-/** Strip anything that could climb out of the scratch directory. */
-function safeFileName(name: string, fallback = 'photo'): string {
-  return basename(name).replace(/[^A-Za-z0-9._-]+/g, '_').slice(-64) || fallback;
-}
-
-/**
- * A folder name that is stable, readable in a URL, and not already taken.
- *
- * The date suffix is not decoration: two renders of the same room from the same
- * name is the normal case, and silently writing the second one over the first
- * would destroy a capture someone had already opened.
- */
-async function reserveSetId(name: string, description: string): Promise<string> {
-  const base = slugify(name) || slugify(description.split(/[.,;]/)[0] ?? '') || 'render';
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 13);
-  let candidate = `${base}-${stamp}`;
-  for (let n = 2; await exists(join(GENERATED_DIR, candidate)); n += 1) {
-    candidate = `${base}-${stamp}-${n}`;
-  }
-  return candidate;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
 /* start                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -369,7 +325,7 @@ async function run(job: Job, input: CreateRenderInput): Promise<void> {
 
     const photoPaths: string[] = [];
     for (const [index, photo] of input.photos.entries()) {
-      const path = join(scratch, `${String(index + 1).padStart(2, '0')}-${safeFileName(photo.name)}`);
+      const path = join(scratch, `${String(index + 1).padStart(2, '0')}-${safeFileName(photo.name, 'photo')}`);
       await writeFile(path, photo.bytes);
       photoPaths.push(path);
     }

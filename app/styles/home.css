@@ -49,6 +49,15 @@
   color: var(--muted);
 }
 
+/* Two ways in, side by side. The quieter pill is the one that spends nothing,
+   which is the opposite of how prominence usually works here - generating is
+   the headline act, so it keeps the fill. */
+.home__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--s2);
+}
+
 /* ================================================================
  * Card
  * ================================================================ */
@@ -325,6 +334,13 @@ a.home-pill:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* "uploaded", "measuring...", a percentage - the state of the file, next to
+   the one other fact about it. */
+.home-file__note {
+  font-weight: 550;
+  color: var(--ink-soft);
+}
+
 .home-file__remove {
   flex: 0 0 auto;
   width: var(--h-control-sm);
@@ -447,6 +463,11 @@ a.home-pill:hover {
   color: var(--danger);
   background: var(--danger-soft);
   border-color: var(--danger-line);
+}
+.home-note[data-tone='ok'] {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--line);
 }
 .home-note[data-tone='warn'] {
   color: var(--warn);
@@ -715,6 +736,164 @@ a.home-pill:hover {
 }
 
 /* ================================================================
+ * Upload: measured facts, orientation, fit
+ *
+ * The upload flow's second screen is the only place in the app that asks
+ * someone to accept a number rather than look at a picture, so these rules
+ * are about legibility of figures: a fixed term column so the three rows
+ * scan as a table, tabular numerals so 8.1 and 14.7 line up under each
+ * other, and the explanation of each figure in --muted beside it rather
+ * than under a disclosure.
+ * ================================================================ */
+
+.home-facts {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  background: var(--surface-sunk);
+  border-radius: var(--r-md);
+}
+
+.home-facts__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+}
+
+.home-facts__term {
+  flex: 0 0 8.5rem;
+  font-size: var(--fs-2);
+  color: var(--muted);
+}
+
+.home-facts__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s1) var(--s3);
+  min-width: 0;
+  font-size: var(--fs-3);
+}
+
+.home-facts__value strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-facts__detail {
+  font-size: var(--fs-2);
+  color: var(--muted);
+}
+
+/* An unbordered fieldset: a bordered one has to fight its own legend for
+   layout, and the group already reads as a group from the spacing. */
+.home-choice {
+  display: grid;
+  gap: var(--s1);
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
+.home-choice__legend {
+  display: block;
+  margin-bottom: var(--s2);
+  padding: 0;
+  font-size: var(--fs-3);
+  font-weight: 600;
+}
+
+.home-choice__note {
+  display: block;
+  max-width: 62ch;
+  margin-top: var(--s1);
+  font-size: var(--fs-2);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.home-choice__option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--s3);
+  row-gap: var(--s1);
+  align-items: center;
+  padding: var(--s3) var(--s4);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+.home-choice__option:hover {
+  background: var(--hover);
+}
+.home-choice__option:focus-within {
+  border-color: var(--line-strong);
+}
+.home-choice__option[data-selected] {
+  background: var(--surface-sunk);
+  border-color: var(--line-strong);
+}
+
+.home-choice__option input {
+  grid-row: 1 / span 2;
+  accent-color: var(--accent);
+}
+
+.home-choice__label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-3);
+  font-weight: 550;
+}
+
+.home-choice__hint {
+  grid-column: 2;
+  font-size: var(--fs-2);
+  color: var(--muted);
+}
+
+.home-choice__evidence {
+  padding-inline: var(--s4);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s3);
+  align-items: start;
+  padding: var(--s4);
+  background: var(--surface-sunk);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.home-toggle input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.home-toggle > span {
+  display: grid;
+  gap: var(--s1);
+  font-size: var(--fs-3);
+}
+
+.home-toggle__hint {
+  max-width: 64ch;
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ================================================================
  * Narrow windows
  * ================================================================ */
 
@@ -731,5 +910,13 @@ a.home-pill:hover {
   }
   .home-pair {
     grid-template-columns: 1fr;
+  }
+  /* The term column stops earning its width once the value wraps under it. */
+  .home-facts__row {
+    display: grid;
+    gap: var(--s1);
+  }
+  .home__actions {
+    flex-wrap: wrap;
   }
 }

@@ -77,7 +77,7 @@ export type {
 export { inspectGlb } from './glb';
 export type { GlbInspection } from './glb';
 
-export { assertLooksLikeSpz, verifyColliderWithLoader } from './verify';
+export { assertLooksLikeSpz, parseColliderGlb, verifyColliderWithLoader } from './verify';
 export type { LoaderVerification } from './verify';
 
 export { runCli } from './cli';

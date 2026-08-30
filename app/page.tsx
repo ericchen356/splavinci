@@ -10,20 +10,31 @@
  *      discarded the waypoints you had just placed; choosing a room is a
  *      library act, so it happens before you are in the editor. Each row is a
  *      link to /plan?capture=<id> and nothing else.
- *   2. MAKE ONE. Photos and/or a walkthrough video, an optional floor plan and
- *      an optional sentence about the layout go to /api/renders, which runs the
- *      same two-stage Marble pipeline the CLI runs. That takes minutes, so the
- *      POST only starts a job and this screen polls it.
+ *   2. BRING ONE. Two ways in, because they are genuinely different acts.
+ *      GENERATE takes photos and/or a walkthrough video to /api/renders, which
+ *      runs the same two-stage Marble pipeline the CLI runs — minutes of work
+ *      and real credits, so the POST only starts a job and this screen polls
+ *      it. UPLOAD takes a splat and a collision mesh you already have to
+ *      /api/uploads, which spends nothing and is finished when the transfer is
+ *      (components/home/UploadForm.tsx).
+ *
+ *      They are two buttons rather than two tabs of one form: a tab implies
+ *      the same job done two ways, and generating a room from a description is
+ *      not the same job as bringing one you already made.
  *
  * A client component in one file on purpose. Server-rendering the list would
  * save a frame of skeleton, but it would need a second file for the interactive
  * half, and everything here — dropzone, validation, polling — is interactive.
+ * The upload flow lives in its own file only because it is a second form, not
+ * a second kind of thing.
  */
 
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Icon } from '@/components/Icon';
+import { DropZone, Field, FileTile, Step } from '@/components/home/FormParts';
+import { UploadForm } from '@/components/home/UploadForm';
 import { registerAssetSets } from '@/lib/assets';
 import type { RenderSummary } from '@/lib/renders';
 // Type-only, so the node:fs in these modules never reaches the browser bundle.
@@ -39,7 +50,7 @@ import {
 /** Fast enough that the bar moves, slow enough that a 30-minute build is ~1800 polls. */
 const POLL_MS = 1_000;
 
-type Field = FieldError['field'];
+type CreateField = FieldError['field'];
 
 const DATE = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -51,10 +62,13 @@ function isTerminal(phase: JobView['phase']): boolean {
 /* page                                                                       */
 /* ========================================================================== */
 
+/** Which way of bringing a capture in is open, if either. */
+type CreateMode = 'generate' | 'upload';
+
 export default function Home() {
   const [renders, setRenders] = useState<RenderSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<CreateMode | null>(null);
   const [job, setJob] = useState<JobView | null>(null);
   /** The capture this session just made, so it is findable in a long list. */
   const [freshId, setFreshId] = useState<string | null>(null);
@@ -137,8 +151,19 @@ export default function Home() {
 
   const startJob = useCallback((started: JobView) => {
     setJob(started);
-    setCreating(false);
+    setMode(null);
   }, []);
+
+  /* An upload is finished the moment it answers — there is no job to poll —
+     so the list is reloaded here rather than off the back of a phase change. */
+  const finishUpload = useCallback(
+    (setId: string) => {
+      setMode(null);
+      setFreshId(setId);
+      void loadRenders();
+    },
+    [loadRenders],
+  );
 
   const cancelJob = useCallback(async () => {
     if (!job) return;
@@ -152,7 +177,15 @@ export default function Home() {
     }
   }, [job]);
 
-  const showForm = creating && !(job && !isTerminal(job.phase));
+  /* A build in flight owns the screen: its panel is where the progress and the
+     cancel are, and a create form left open beside it invites starting a second
+     one on top of the first. */
+  const open = job && !isTerminal(job.phase) ? null : mode;
+
+  const choose = (next: CreateMode) => {
+    setMode((current) => (current === next ? null : next));
+    setJob(null);
+  };
 
   return (
     <main className="home">
@@ -161,31 +194,42 @@ export default function Home() {
           <h1 className="home__title">splavinci</h1>
           <p className="home__lede">
             Author a camera flythrough through a captured room. Pick a capture to plan a
-            path in it, or build a new one from photos or a walkthrough video.
+            path in it, generate one from photos or a walkthrough video, or upload a splat
+            and collision mesh you already have.
           </p>
         </div>
-        <button
-          type="button"
-          className="home-pill home-pill--accent"
-          onClick={() => {
-            setCreating((open) => !open);
-            setJob(null);
-          }}
-          aria-expanded={showForm}
-        >
-          {showForm ? 'Cancel' : 'New render'}
-        </button>
+        <div className="home__actions">
+          <button
+            type="button"
+            className="home-pill"
+            onClick={() => choose('upload')}
+            aria-expanded={open === 'upload'}
+          >
+            {open === 'upload' ? 'Cancel' : 'Upload capture'}
+          </button>
+          <button
+            type="button"
+            className="home-pill home-pill--accent"
+            onClick={() => choose('generate')}
+            aria-expanded={open === 'generate'}
+          >
+            {open === 'generate' ? 'Cancel' : 'New render'}
+          </button>
+        </div>
       </header>
 
       {job && <JobPanel job={job} onCancel={cancelJob} onDismiss={() => setJob(null)} />}
 
-      {showForm && <CreateForm onStarted={startJob} />}
+      {open === 'generate' && <CreateForm onStarted={startJob} />}
+      {open === 'upload' && (
+        <UploadForm onAdded={finishUpload} onCancel={() => setMode(null)} />
+      )}
 
       <RenderList
         renders={renders}
         error={listError}
         freshId={freshId}
-        onCreate={() => setCreating(true)}
+        onCreate={() => setMode('generate')}
       />
     </main>
   );
@@ -285,6 +329,7 @@ function RenderRow({ render, fresh }: { render: RenderSummary; fresh: boolean })
           {facts.length > 0 && <span className="home-render__facts">{facts.join(' · ')}</span>}
           {fresh && <span className="home-chip home-chip--ink">New</span>}
           {render.source === 'builtin' && <span className="home-chip">Bundled</span>}
+          {render.source === 'uploaded' && <span className="home-chip">Uploaded</span>}
           {!render.present && <span className="home-chip home-chip--warn">Files missing</span>}
         </span>
         <span className="home-render__desc">{render.description}</span>
@@ -420,7 +465,7 @@ function CreateForm({ onStarted }: { onStarted: (job: JobView) => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [keywords, setKeywords] = useState('');
-  const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
+  const [touched, setTouched] = useState<Partial<Record<CreateField, boolean>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -428,7 +473,7 @@ function CreateForm({ onStarted }: { onStarted: (job: JobView) => void }) {
     () => validateUpload({ photos, video, blueprint, description, keywords, name }),
     [photos, video, blueprint, description, keywords, name],
   );
-  const errorFor = (field: Field): string | null =>
+  const errorFor = (field: CreateField): string | null =>
     touched[field] ? (errors.find((error) => error.field === field)?.message ?? null) : null;
 
   const addPhotos = useCallback((files: File[]) => {
@@ -669,216 +714,4 @@ function CreateForm({ onStarted }: { onStarted: (job: JobView) => void }) {
 /** Identity for a File the DOM does not give us. Good enough to de-duplicate. */
 function fileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-/* ========================================================================== */
-/* form parts                                                                 */
-/* ========================================================================== */
-
-/* A numbered step. No slot for a caption beside the title: the ones that were
-   there explained how the pipeline works, which is not a thing anyone filling
-   in this form needs to know. What the field accepts stays, on the control. */
-function Step({
-  n,
-  title,
-  optional,
-  children,
-}: {
-  n: number;
-  title: string;
-  optional?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="home-step">
-      <div className="home-step__head">
-        <span className="home-step__n" aria-hidden="true">
-          {n}
-        </span>
-        <span className="home-step__title">
-          {title}
-          {optional && <span className="home-step__optional">optional</span>}
-        </span>
-      </div>
-      <div className="home-step__body">{children}</div>
-    </section>
-  );
-}
-
-/**
- * A real file input with a drop target draped over it.
- *
- * The input is the control: it is what Tab reaches, what Enter opens, and what
- * the label names. Dragging is an accelerator layered on top, never the only
- * route in — WCAG 2.2 requires a single-pointer alternative for any drag the
- * page invents, and a div with an onDrop handler is exactly that trap.
- */
-function DropZone({
-  label,
-  sublabel,
-  accept,
-  multiple,
-  compact,
-  invalid,
-  error,
-  onFiles,
-}: {
-  label: string;
-  sublabel?: string;
-  /** Filters the picker only. A drop bypasses it, so `validateUpload` is the check. */
-  accept: string;
-  multiple?: boolean;
-  compact?: boolean;
-  invalid?: boolean;
-  error?: string | null;
-  onFiles: (files: File[]) => void;
-}) {
-  const inputId = useId();
-  const labelId = `${inputId}-label`;
-  const subId = `${inputId}-sub`;
-  const errorId = `${inputId}-error`;
-  const [over, setOver] = useState(false);
-  /* dragenter/dragleave fire for every child the pointer crosses; a depth count
-     is the only way to know the pointer actually left the zone. */
-  const depth = useRef(0);
-
-  return (
-    <>
-      <label
-        className="home-drop"
-        htmlFor={inputId}
-        data-over={over || undefined}
-        data-invalid={invalid || undefined}
-        data-compact={compact || undefined}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          depth.current += 1;
-          setOver(true);
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDragLeave={() => {
-          depth.current = Math.max(0, depth.current - 1);
-          if (depth.current === 0) setOver(false);
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          depth.current = 0;
-          setOver(false);
-          const dropped = Array.from(event.dataTransfer.files);
-          if (dropped.length > 0) onFiles(multiple ? dropped : dropped.slice(0, 1));
-        }}
-      >
-        {/* Named by the visible text rather than by the wrapping <label>: a file
-            input's implicit label is resolved inconsistently, and the one thing
-            that must never be in doubt is what this control is called. */}
-        <input
-          id={inputId}
-          className="visually-hidden"
-          type="file"
-          accept={accept}
-          multiple={multiple}
-          aria-labelledby={labelId}
-          aria-invalid={invalid || undefined}
-          aria-describedby={[sublabel ? subId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined}
-          onChange={(event) => {
-            const chosen = Array.from(event.target.files ?? []);
-            if (chosen.length > 0) onFiles(chosen);
-            // Cleared so re-picking the same file after a remove still fires.
-            event.target.value = '';
-          }}
-        />
-        <span className="home-drop__label" id={labelId}>
-          {label}
-        </span>
-        {sublabel && (
-          <span className="home-drop__sub" id={subId}>
-            {sublabel}
-          </span>
-        )}
-      </label>
-      {error && (
-        <p className="home-field__error" id={errorId} role="alert">
-          <Icon name="error" /> {error}
-        </p>
-      )}
-    </>
-  );
-}
-
-function FileTile({ file, onRemove }: { file: File; onRemove: () => void }) {
-  return (
-    <div className="home-file">
-      <span className="home-file__name" title={file.name}>
-        {file.name}
-      </span>
-      <span className="home-file__size">{formatBytes(file.size)}</span>
-      <button
-        type="button"
-        className="home-file__remove"
-        onClick={onRemove}
-        aria-label={`Remove ${file.name}`}
-      >
-        <Icon name="close" size={14} />
-      </button>
-    </div>
-  );
-}
-
-/**
- * Label, hint, control, error — wired together by id.
- *
- * A render prop rather than a wrapper so the input keeps its own type and
- * value binding while this owns the parts that must agree: `id` on the label,
- * `aria-describedby` pointing at both the hint and the error, `aria-invalid`
- * when there is one.
- */
-function Field({
-  label,
-  hint,
-  optional,
-  error,
-  onBlur,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  optional?: boolean;
-  error: string | null;
-  onBlur: () => void;
-  children: (props: {
-    id: string;
-    'aria-describedby': string | undefined;
-    'aria-invalid': true | undefined;
-    onBlur: () => void;
-  }) => React.ReactNode;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  const described = [hint ? hintId : null, error ? errorId : null].filter(Boolean).join(' ');
-
-  return (
-    <div className="home-field">
-      <label className="home-field__label" htmlFor={id}>
-        {label}
-        {optional && <span className="home-field__optional">optional</span>}
-      </label>
-      {children({
-        id,
-        'aria-describedby': described || undefined,
-        'aria-invalid': error ? true : undefined,
-        onBlur,
-      })}
-      {hint && (
-        <p className="home-field__hint" id={hintId}>
-          {hint}
-        </p>
-      )}
-      {error && (
-        <p className="home-field__error" id={errorId} role="alert">
-          <Icon name="error" /> {error}
-        </p>
-      )}
-    </div>
-  );
 }

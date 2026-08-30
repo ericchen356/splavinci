@@ -23,12 +23,14 @@ export type LoaderVerification = {
 };
 
 /**
- * Parse with GLTFLoader and count triangles. Throws MarbleError on a parse
- * failure or on geometry that is present-but-empty.
+ * Parse collider bytes with the same GLTFLoader the app uses at runtime.
+ *
+ * Separate from the verification below because a caller can want the scene
+ * itself: lib/upload/colliderScan.ts measures an uploaded collider's bounds
+ * and floor, and re-parsing a 90 MB GLB to do it would double the one
+ * genuinely expensive step in the check.
  */
-export async function verifyColliderWithLoader(
-  bytes: Uint8Array,
-): Promise<LoaderVerification> {
+export async function parseColliderGlb(bytes: Uint8Array): Promise<THREE.Object3D> {
   const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
 
   // GLTFLoader.parse wants a standalone ArrayBuffer; slicing detaches it from
@@ -38,7 +40,7 @@ export async function verifyColliderWithLoader(
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
 
-  const scene = await new Promise<THREE.Object3D>((resolvePromise, reject) => {
+  return new Promise<THREE.Object3D>((resolvePromise, reject) => {
     try {
       new GLTFLoader().parse(
         arrayBuffer,
@@ -59,6 +61,16 @@ export async function verifyColliderWithLoader(
       cause,
     });
   });
+}
+
+/**
+ * Parse with GLTFLoader and count triangles. Throws MarbleError on a parse
+ * failure or on geometry that is present-but-empty.
+ */
+export async function verifyColliderWithLoader(
+  bytes: Uint8Array,
+): Promise<LoaderVerification> {
+  const scene = await parseColliderGlb(bytes);
 
   let meshes = 0;
   let triangles = 0;

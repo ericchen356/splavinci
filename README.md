@@ -14,7 +14,8 @@ drawn where it stands as a camera you can see.
 
 Captures come from the [World Labs Marble](https://www.worldlabs.ai/) API: you
 give it photographs and a description of a layout, it returns a splat and a
-collision mesh.
+collision mesh. If you already have a splat and a mesh, you can upload them
+instead — see [Uploading a capture you already have](#uploading-a-capture-you-already-have).
 
 ---
 
@@ -100,15 +101,84 @@ a capture holds up as the camera crosses it. World IDs are in each capture's
 
 ---
 
+## Uploading a capture you already have
+
+Generation is not the only way in. If you have a splat and the collision mesh
+that goes with it — from Marble, from a 3DGS trainer, from Blender — **Upload
+capture** on the home page adds it to the library directly. It spends no
+credits and takes as long as the transfer does.
+
+```
+splat        .spz or .ply, up to 640 MB
+collider     .glb only (a .gltf points at sibling .bin files that cannot come with it)
+still        optional, for the library row
+```
+
+Each file is streamed straight to disk and read as it lands, so a 300 MB splat
+never sits in the server's heap and the progress bar is the real one.
+
+### The part that is not obvious
+
+Two files arrive with no statement anywhere of how they relate, and getting
+that wrong does not fail — the walk grid still rasterises, the path still
+plans, the flythrough still plays, and the camera flies through a room that is
+upside down or half the size it should be. So both files are measured before
+anything is written, and you confirm the result:
+
+- The splat is sampled at an even stride (250k points, whatever the file size)
+  for a 1st-to-99th-percentile bounding box — its size without the floaters.
+- The collider is parsed with the same GLTFLoader the app uses, for its bounds,
+  its triangle count and where its walk surface is.
+- The splat is then **scaled so the two agree on the room's floor diagonal** and
+  dropped so its floor sits on the collider's. The screen shows both sizes, the
+  scale, the lift, and how far apart the two footprints still are.
+
+Which way up the file was authored is the one thing no bounding box can answer:
+flipping a room about X leaves every extent identical. What does distinguish
+them is that interiors are bottom-heavy — furniture, clutter and floor detail
+below the midline, mostly bare ceiling above — so the opacity-weighted mass
+either side of the midline is measured and reported as a ratio. On the fixture
+room it reads 2.6:1 the right way up and 0.39:1 upside down. When it comes out
+near 1:1 the screen says so rather than guessing quietly.
+
+It is a default for a control you can change, and the numbers move as you
+change it. To see all of this from the command line before uploading anything:
+
+```bash
+npx tsx scripts/upload-scan.ts path/to/room.spz path/to/collider.glb
+```
+
+### How well it does
+
+Both captures in this repo whose true transform is known independently come
+back right:
+
+| capture | truth | measured |
+|---|---|---|
+| `sample-room` (authored Y-up, identity) | scale 1, no lift | Y-up, scale 0.9993, lift 3 mm, footprints 0.0% apart |
+| `hobbiton` (Y-down, collider derived from the splat) | scale 1, lift 0.893 m | Y-down, scale 1.088, lift 1.04 m, footprints 1.7% apart |
+
+The hobbiton scale runs about 8% high because its collider is derived at a 4 m
+cell size and is padded outward by roughly half a cell on every side — the fit
+is matching the room it was actually given.
+
+An uploaded capture lands in `public/generated/<id>/` like a generated one, with
+a `scene.json` that records the transform **and the measurements it came from**,
+so a capture whose alignment is questioned later has somewhere to answer from.
+
+---
+
 ## Layout
 
 ```
 app/            Next.js App Router — / (library), /plan, /review, /api
-components/     plan/ (map, overlay, inspector), review/ (player), scene/ (loaders)
+components/     home/ (create + upload forms), plan/ (map, overlay, inspector),
+                review/ (player), scene/ (loaders)
 lib/
   marble/       the World Labs adapter — the only place that knows the wire format
   path/         grid, A*, splines, shot sampling — the camera path generator
   scene/        splat and collider loading
+  upload/       measuring an uploaded splat and collider, and fitting one to the other
   plan/ review/ zustand stores
 samples/        one folder per sample scene: blueprint, photos, intake.json
 scripts/        capture generation, blueprint drawing, quality measurement
@@ -119,6 +189,7 @@ scripts/        capture generation, blueprint drawing, quality measurement
 | | |
 |---|---|
 | `scripts/render-scene.ts` | generate a capture from a `samples/` folder (`--dry-run` first) |
+| `scripts/upload-scan.ts` | measure a splat/collider pair and print the alignment, without uploading |
 | `scripts/scene-quality.ts` | measure a capture — coverage, holes, whether a camera can route it |
 | `scripts/make-blueprint.mjs` | draw the sample floor plans; the geometry lives here, not in the PNGs |
 | `scripts/world-densities.ts` | list a finished world's splat densities and their sizes |
